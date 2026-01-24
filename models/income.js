@@ -100,7 +100,7 @@ const IncomeSchema = new mongoose.Schema({
   },
   paymentMethod: {
     type: String,
-    enum: ['Cash', 'Card', 'UPI', 'Bank Transfer', 'Credit', 'Other'],
+    enum: ['Cash', 'Udhar', 'Account', 'Card', 'UPI', 'Bank Transfer', 'Credit', 'Other'],
     default: 'Cash'
   },
   customerName: {
