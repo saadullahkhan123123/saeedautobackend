@@ -6,16 +6,11 @@ require('dotenv').config();
 const app = express();
 
 /* -----------------------------------------
-   ✅ CORS CONFIG (Frontend + Local)
+   ✅ CORS CONFIG (Production Frontend Only)
 ------------------------------------------- */
 app.use(
   cors({
-    origin: [
-      'https://inventory-system-seven-alpha.vercel.app', // PRODUCTION FRONTEND
-      'http://localhost:5173', // Vite Local
-      'http://localhost:3000', // React Local
-      'http://localhost:5000'
-    ],
+    origin: 'https://inventory-system-seven-alpha.vercel.app',
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
     credentials: true,
   })

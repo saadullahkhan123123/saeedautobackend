@@ -21,7 +21,7 @@ router.get('/dashboard', async (req, res) => {
 
     const totalRevenue = totalRevenueResult[0]?.total || 0;
 
-    // Today's date calculations
+    // Today's date calculati
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const tomorrow = new Date(today);
