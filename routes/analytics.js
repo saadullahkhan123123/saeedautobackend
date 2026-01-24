@@ -1,23 +1,53 @@
 const express = require('express');
 const router = express.Router();
+const mongoose = require('mongoose');
 const Item = require('../models/items');
 const Slip = require('../models/slips');
 const Income = require('../models/income');
 
+// Helper function to ensure MongoDB connection
+const ensureConnection = async () => {
+  if (mongoose.connection.readyState === 1) {
+    return true;
+  }
+  if (mongoose.connection.readyState === 0) {
+    try {
+      await mongoose.connect(process.env.MONGO_URI, {
+        serverSelectionTimeoutMS: 10000,
+        socketTimeoutMS: 45000,
+        connectTimeoutMS: 10000,
+      });
+      return true;
+    } catch (err) {
+      console.error('❌ Failed to connect to MongoDB:', err.message);
+      return false;
+    }
+  }
+  return false;
+};
+
 router.get('/dashboard', async (req, res) => {
   try {
+    const isConnected = await ensureConnection();
+    if (!isConnected) {
+      return res.status(503).json({ 
+        error: 'Database connection unavailable', 
+        details: 'Please try again in a moment' 
+      });
+    }
+
     console.log('📊 Fetching dashboard analytics...');
     
-    // Basic counts
-    const totalItems = await Item.countDocuments({ isActive: true });
-    const totalSlips = await Slip.countDocuments();
-    const totalIncomeRecords = await Income.countDocuments({ isActive: true });
+    // Basic counts with error handling
+    const totalItems = await Item.countDocuments({ $or: [{ isActive: true }, { isActive: { $exists: false } }] }).maxTimeMS(10000);
+    const totalSlips = await Slip.countDocuments().maxTimeMS(10000);
+    const totalIncomeRecords = await Income.countDocuments({ $or: [{ isActive: true }, { isActive: { $exists: false } }] }).maxTimeMS(10000);
     
     // Revenue calculations
     const totalRevenueResult = await Slip.aggregate([
       { $match: { status: { $ne: 'Cancelled' } } },
       { $group: { _id: null, total: { $sum: '$totalAmount' } } }
-    ]);
+    ]).maxTimeMS(15000);
 
     const totalRevenue = totalRevenueResult[0]?.total || 0;
 
@@ -30,7 +60,7 @@ router.get('/dashboard', async (req, res) => {
     // Today's slips and revenue
     const todaySlips = await Slip.countDocuments({
       createdAt: { $gte: today, $lt: tomorrow }
-    });
+    }).maxTimeMS(10000);
 
     const todayRevenueResult = await Slip.aggregate([
       { 
@@ -40,21 +70,23 @@ router.get('/dashboard', async (req, res) => {
         } 
       },
       { $group: { _id: null, total: { $sum: '$totalAmount' } } }
-    ]);
+    ]).maxTimeMS(15000);
 
     const todayRevenue = todayRevenueResult[0]?.total || 0;
 
     // Low stock items
     const lowStockItems = await Item.countDocuments({ 
       quantity: { $lte: 10 },
-      isActive: true 
-    });
+      $or: [{ isActive: true }, { isActive: { $exists: false } }]
+    }).maxTimeMS(10000);
 
     // Recent sales activity
     const recentSales = await Slip.find()
       .sort({ createdAt: -1 })
       .limit(5)
-      .select('slipNumber totalAmount customerName createdAt');
+      .select('slipNumber totalAmount customerName createdAt')
+      .maxTimeMS(10000)
+      .lean();
 
     // Payment method distribution
     const paymentMethods = await Slip.aggregate([
@@ -66,7 +98,7 @@ router.get('/dashboard', async (req, res) => {
           total: { $sum: '$totalAmount' }
         }
       }
-    ]);
+    ]).maxTimeMS(15000);
 
     res.json({
       summary: {
@@ -94,6 +126,14 @@ router.get('/dashboard', async (req, res) => {
 // GET /api/analytics/sales-trends - Get sales trends for charts
 router.get('/sales-trends', async (req, res) => {
   try {
+    const isConnected = await ensureConnection();
+    if (!isConnected) {
+      return res.status(503).json({ 
+        error: 'Database connection unavailable', 
+        details: 'Please try again in a moment' 
+      });
+    }
+
     const { period = 'week' } = req.query; // week, month, year
     
     let days = 7;
@@ -132,7 +172,7 @@ router.get('/sales-trends', async (req, res) => {
         }
       },
       { $sort: { '_id.date': 1 } }
-    ]);
+    ]).maxTimeMS(20000);
 
     res.json({
       period,
@@ -151,6 +191,14 @@ router.get('/sales-trends', async (req, res) => {
 // GET /api/analytics/top-products - Get top selling products
 router.get('/top-products', async (req, res) => {
   try {
+    const isConnected = await ensureConnection();
+    if (!isConnected) {
+      return res.status(503).json({ 
+        error: 'Database connection unavailable', 
+        details: 'Please try again in a moment' 
+      });
+    }
+
     const { limit = 10, period = 'all' } = req.query;
     
     let matchStage = { status: { $ne: 'Cancelled' } };
@@ -175,7 +223,7 @@ router.get('/top-products', async (req, res) => {
       },
       { $sort: { totalQuantity: -1 } },
       { $limit: parseInt(limit) }
-    ]);
+    ]).maxTimeMS(20000);
 
     res.json({
       period,
@@ -194,6 +242,20 @@ router.get('/top-products', async (req, res) => {
 // GET /api/analytics/inventory-levels - Get inventory stock levels
 router.get('/inventory-levels', async (req, res) => {
   try {
+    const isConnected = await ensureConnection();
+    if (!isConnected) {
+      return res.status(503).json({ 
+        error: 'Database connection unavailable', 
+        details: 'Please try again in a moment',
+        stockLevels: {
+          outOfStock: [],
+          lowStock: [],
+          inStock: []
+        },
+        totalItems: 0
+      });
+    }
+
     console.log('📦 Fetching inventory levels...');
     
     // Find items - handle both with and without isActive field, and ensure quantity exists
@@ -208,6 +270,7 @@ router.get('/inventory-levels', async (req, res) => {
       .select('name quantity price category')
       .sort({ quantity: 1 })
       .limit(50)
+      .maxTimeMS(15000)
       .lean(); // Use lean() for better performance
 
     // Ensure quantity is a number, default to 0 if null/undefined/NaN
@@ -262,6 +325,15 @@ router.get('/inventory-levels', async (req, res) => {
 // GET /api/analytics/orders-by-status - Get orders grouped by status
 router.get('/orders-by-status', async (req, res) => {
   try {
+    const isConnected = await ensureConnection();
+    if (!isConnected) {
+      return res.status(503).json({ 
+        error: 'Database connection unavailable', 
+        details: 'Please try again in a moment',
+        ordersByStatus: []
+      });
+    }
+
     const ordersByStatus = await Slip.aggregate([
       {
         $group: {
@@ -271,7 +343,7 @@ router.get('/orders-by-status', async (req, res) => {
         }
       },
       { $sort: { count: -1 } }
-    ]);
+    ]).maxTimeMS(15000);
 
     res.json({
       ordersByStatus,

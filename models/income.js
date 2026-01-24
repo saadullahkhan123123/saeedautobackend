@@ -144,7 +144,6 @@ IncomeSchema.virtual('totalProducts').get(function() {
   return this.productsSold.reduce((sum, product) => sum + product.quantity, 0);
 });
 
-// Virtual for average product price
 IncomeSchema.virtual('averageProductPrice').get(function() {
   if (this.productsSold.length === 0) return 0;
   return this.totalIncome / this.totalProducts;
@@ -152,8 +151,7 @@ IncomeSchema.virtual('averageProductPrice').get(function() {
 
 // Method to calculate profit (if cost prices are available)
 IncomeSchema.methods.calculateProfit = function() {
-  // This would need cost price data from items
-  // For now, return 0 as we don't have cost price in productsSold
+ 
   return 0;
 };
 

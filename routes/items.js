@@ -1,10 +1,42 @@
 const express = require('express');
 const router = express.Router();
+const mongoose = require('mongoose');
 const Item = require('../models/items');
+
+// Helper function to ensure MongoDB connection
+const ensureConnection = async () => {
+  if (mongoose.connection.readyState === 1) {
+    return true;
+  }
+  if (mongoose.connection.readyState === 0) {
+    try {
+      await mongoose.connect(process.env.MONGO_URI, {
+        serverSelectionTimeoutMS: 10000,
+        socketTimeoutMS: 45000,
+        connectTimeoutMS: 10000,
+      });
+      return true;
+    } catch (err) {
+      console.error('❌ Failed to connect to MongoDB:', err.message);
+      return false;
+    }
+  }
+  return false;
+};
 
 // GET /api/items - Get all items with filtering and pagination
 router.get('/', async (req, res) => {
   try {
+    const isConnected = await ensureConnection();
+    if (!isConnected) {
+      return res.status(503).json({ 
+        error: 'Database connection unavailable', 
+        details: 'Please try again in a moment',
+        items: [],
+        categories: []
+      });
+    }
+
     const { 
       page = 1, 
       limit = 50, 
@@ -13,7 +45,7 @@ router.get('/', async (req, res) => {
       lowStock = false 
     } = req.query;
 
-    const filter = { isActive: true };
+    const filter = { $or: [{ isActive: true }, { isActive: { $exists: false } }] };
     
     // Search filter
     if (search) {
@@ -37,12 +69,14 @@ router.get('/', async (req, res) => {
     const items = await Item.find(filter)
       .sort({ createdAt: -1 })
       .limit(limit * 1)
-      .skip((page - 1) * limit);
+      .skip((page - 1) * limit)
+      .maxTimeMS(15000)
+      .lean();
 
-    const total = await Item.countDocuments(filter);
+    const total = await Item.countDocuments(filter).maxTimeMS(10000);
 
     // Get all categories for filter dropdown
-    const categories = await Item.distinct('category', { isActive: true });
+    const categories = await Item.distinct('category', { $or: [{ isActive: true }, { isActive: { $exists: false } }] }).maxTimeMS(10000);
 
     res.json({
       items,
