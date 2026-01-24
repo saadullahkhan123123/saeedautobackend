@@ -43,10 +43,20 @@ router.get('/dashboard', async (req, res) => {
     const totalSlips = await Slip.countDocuments().maxTimeMS(10000);
     const totalIncomeRecords = await Income.countDocuments({ $or: [{ isActive: true }, { isActive: { $exists: false } }] }).maxTimeMS(10000);
     
-    // Revenue calculations
+    // Revenue calculations - handle null/undefined totalAmount
     const totalRevenueResult = await Slip.aggregate([
-      { $match: { status: { $ne: 'Cancelled' } } },
-      { $group: { _id: null, total: { $sum: '$totalAmount' } } }
+      { 
+        $match: { 
+          status: { $ne: 'Cancelled' },
+          totalAmount: { $exists: true, $ne: null }
+        } 
+      },
+      { 
+        $group: { 
+          _id: null, 
+          total: { $sum: { $ifNull: ['$totalAmount', 0] } } 
+        } 
+      }
     ]).maxTimeMS(15000);
 
     const totalRevenue = totalRevenueResult[0]?.total || 0;
@@ -66,10 +76,16 @@ router.get('/dashboard', async (req, res) => {
       { 
         $match: { 
           createdAt: { $gte: today, $lt: tomorrow },
-          status: { $ne: 'Cancelled' }
+          status: { $ne: 'Cancelled' },
+          totalAmount: { $exists: true, $ne: null }
         } 
       },
-      { $group: { _id: null, total: { $sum: '$totalAmount' } } }
+      { 
+        $group: { 
+          _id: null, 
+          total: { $sum: { $ifNull: ['$totalAmount', 0] } } 
+        } 
+      }
     ]).maxTimeMS(15000);
 
     const todayRevenue = todayRevenueResult[0]?.total || 0;
@@ -83,22 +99,86 @@ router.get('/dashboard', async (req, res) => {
     // Recent sales activity
     const recentSales = await Slip.find()
       .sort({ createdAt: -1 })
-      .limit(5)
-      .select('slipNumber totalAmount customerName createdAt')
+      .limit(10)
+      .select('slipNumber totalAmount customerName createdAt status paymentMethod')
       .maxTimeMS(10000)
       .lean();
 
-    // Payment method distribution
+    // Payment method distribution - handle null paymentMethod and totalAmount
     const paymentMethods = await Slip.aggregate([
-      { $match: { status: { $ne: 'Cancelled' } } },
+      { 
+        $match: { 
+          status: { $ne: 'Cancelled' },
+          totalAmount: { $exists: true, $ne: null }
+        } 
+      },
       {
         $group: {
-          _id: '$paymentMethod',
+          _id: { $ifNull: ['$paymentMethod', 'Cash'] },
           count: { $sum: 1 },
-          total: { $sum: '$totalAmount' }
+          total: { $sum: { $ifNull: ['$totalAmount', 0] } }
         }
       }
     ]).maxTimeMS(15000);
+
+    // Total unique customers
+    const uniqueCustomers = await Slip.distinct('customerName').maxTimeMS(10000);
+    const totalCustomers = uniqueCustomers.length;
+
+    // Monthly revenue
+    const currentMonth = new Date();
+    currentMonth.setDate(1);
+    currentMonth.setHours(0, 0, 0, 0);
+    const monthlyRevenueResult = await Slip.aggregate([
+      { 
+        $match: { 
+          createdAt: { $gte: currentMonth },
+          status: { $ne: 'Cancelled' },
+          totalAmount: { $exists: true, $ne: null }
+        } 
+      },
+      { 
+        $group: { 
+          _id: null, 
+          total: { $sum: { $ifNull: ['$totalAmount', 0] } } 
+        } 
+      }
+    ]).maxTimeMS(15000);
+    const monthlyRevenue = monthlyRevenueResult[0]?.total || 0;
+
+    // Yearly revenue
+    const currentYear = new Date();
+    currentYear.setMonth(0, 1);
+    currentYear.setHours(0, 0, 0, 0);
+    const yearlyRevenueResult = await Slip.aggregate([
+      { 
+        $match: { 
+          createdAt: { $gte: currentYear },
+          status: { $ne: 'Cancelled' },
+          totalAmount: { $exists: true, $ne: null }
+        } 
+      },
+      { 
+        $group: { 
+          _id: null, 
+          total: { $sum: { $ifNull: ['$totalAmount', 0] } } 
+        } 
+      }
+    ]).maxTimeMS(15000);
+    const yearlyRevenue = yearlyRevenueResult[0]?.total || 0;
+
+    // Pending orders/slips
+    const pendingOrders = await Slip.countDocuments({ status: 'Pending' }).maxTimeMS(10000);
+
+    // Out of stock items
+    const outOfStockItems = await Item.countDocuments({ 
+      quantity: 0,
+      $or: [{ isActive: true }, { isActive: { $exists: false } }]
+    }).maxTimeMS(10000);
+
+    // Calculate profit (revenue - cost, if cost data available)
+    // For now, we'll use revenue as profit since cost tracking might not be available
+    const profit = totalRevenue; // Can be enhanced later with cost tracking
 
     res.json({
       summary: {
@@ -108,7 +188,13 @@ router.get('/dashboard', async (req, res) => {
         totalRevenue,
         todaySlips,
         todayRevenue,
-        lowStockItems
+        monthlyRevenue,
+        yearlyRevenue,
+        lowStockItems,
+        outOfStockItems,
+        totalCustomers,
+        pendingOrders,
+        profit
       },
       recentSales,
       paymentMethods,
@@ -116,9 +202,21 @@ router.get('/dashboard', async (req, res) => {
     });
   } catch (error) {
     console.error('❌ Error fetching analytics:', error);
+    console.error('Error stack:', error.stack);
     res.status(500).json({ 
       error: 'Failed to fetch analytics', 
-      details: error.message 
+      details: error.message,
+      summary: {
+        totalItems: 0,
+        totalSlips: 0,
+        totalIncomeRecords: 0,
+        totalRevenue: 0,
+        todaySlips: 0,
+        todayRevenue: 0,
+        lowStockItems: 0
+      },
+      recentSales: [],
+      paymentMethods: []
     });
   }
 });
@@ -157,18 +255,25 @@ router.get('/sales-trends', async (req, res) => {
     const salesTrends = await Slip.aggregate([
       {
         $match: {
-          createdAt: { $gte: startDate },
-          status: { $ne: 'Cancelled' }
+          createdAt: { $gte: startDate, $exists: true },
+          status: { $ne: 'Cancelled' },
+          totalAmount: { $exists: true, $ne: null }
         }
       },
       {
         $group: {
           _id: {
-            date: { $dateToString: { format: groupFormat, date: '$createdAt' } }
+            date: { 
+              $dateToString: { 
+                format: groupFormat, 
+                date: { $ifNull: ['$createdAt', new Date()] },
+                timezone: 'UTC'
+              } 
+            }
           },
-          totalSales: { $sum: '$totalAmount' },
+          totalSales: { $sum: { $ifNull: ['$totalAmount', 0] } },
           totalTransactions: { $sum: 1 },
-          averageSale: { $avg: '$totalAmount' }
+          averageSale: { $avg: { $ifNull: ['$totalAmount', 0] } }
         }
       },
       { $sort: { '_id.date': 1 } }
@@ -181,9 +286,12 @@ router.get('/sales-trends', async (req, res) => {
     });
   } catch (error) {
     console.error('❌ Error fetching sales trends:', error);
+    console.error('Error stack:', error.stack);
     res.status(500).json({ 
       error: 'Failed to fetch sales trends', 
-      details: error.message 
+      details: error.message,
+      period,
+      salesTrends: []
     });
   }
 });
@@ -201,28 +309,39 @@ router.get('/top-products', async (req, res) => {
 
     const { limit = 10, period = 'all' } = req.query;
     
-    let matchStage = { status: { $ne: 'Cancelled' } };
+    let matchStage = { 
+      status: { $ne: 'Cancelled' },
+      products: { $exists: true, $ne: [], $type: 'array' }
+    };
     
     if (period !== 'all') {
       const days = period === 'week' ? 7 : period === 'month' ? 30 : 365;
       const startDate = new Date();
       startDate.setDate(startDate.getDate() - days);
-      matchStage.createdAt = { $gte: startDate };
+      matchStage.createdAt = { $gte: startDate, $exists: true };
     }
 
     const topProducts = await Slip.aggregate([
-      { $match: matchStage },
+      { 
+        $match: matchStage
+      },
       { $unwind: '$products' },
       {
+        $match: {
+          'products.productName': { $exists: true, $ne: null, $ne: '' },
+          'products.quantity': { $exists: true, $type: 'number', $gt: 0 }
+        }
+      },
+      {
         $group: {
-          _id: '$products.productName',
-          totalQuantity: { $sum: '$products.quantity' },
-          totalRevenue: { $sum: '$products.totalPrice' },
+          _id: { $ifNull: ['$products.productName', 'Unknown Product'] },
+          totalQuantity: { $sum: { $ifNull: ['$products.quantity', 0] } },
+          totalRevenue: { $sum: { $ifNull: ['$products.totalPrice', 0] } },
           transactionCount: { $sum: 1 }
         }
       },
       { $sort: { totalQuantity: -1 } },
-      { $limit: parseInt(limit) }
+      { $limit: parseInt(limit) || 10 }
     ]).maxTimeMS(20000);
 
     res.json({
@@ -232,9 +351,12 @@ router.get('/top-products', async (req, res) => {
     });
   } catch (error) {
     console.error('❌ Error fetching top products:', error);
+    console.error('Error stack:', error.stack);
     res.status(500).json({ 
       error: 'Failed to fetch top products', 
-      details: error.message 
+      details: error.message,
+      period,
+      topProducts: []
     });
   }
 });
@@ -336,10 +458,26 @@ router.get('/orders-by-status', async (req, res) => {
 
     const ordersByStatus = await Slip.aggregate([
       {
+        $match: {
+          status: { $exists: true }
+        }
+      },
+      {
         $group: {
-          _id: '$status',
+          _id: { $ifNull: ['$status', 'Paid'] },
           count: { $sum: 1 },
-          totalRevenue: { $sum: '$totalAmount' }
+          totalRevenue: { 
+            $sum: { 
+              $cond: [
+                { $and: [
+                  { $ne: ['$totalAmount', null] },
+                  { $ne: ['$status', 'Cancelled'] }
+                ]},
+                { $ifNull: ['$totalAmount', 0] },
+                0
+              ]
+            }
+          }
         }
       },
       { $sort: { count: -1 } }
@@ -351,9 +489,11 @@ router.get('/orders-by-status', async (req, res) => {
     });
   } catch (error) {
     console.error('❌ Error fetching orders by status:', error);
+    console.error('Error stack:', error.stack);
     res.status(500).json({ 
       error: 'Failed to fetch orders by status', 
-      details: error.message 
+      details: error.message,
+      ordersByStatus: []
     });
   }
 });

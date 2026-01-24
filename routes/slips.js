@@ -228,14 +228,43 @@ router.post('/', async (req, res) => {
   session.startTransaction();
 
   try {
-    const { customerName, subtotal, totalAmount, products } = req.body;
+    // Ensure MongoDB connection
+    const isConnected = await ensureConnection();
+    if (!isConnected) {
+      return res.status(503).json({ 
+        error: 'Database connection unavailable', 
+        details: 'Please try again in a moment' 
+      });
+    }
+
+    const { customerName, customerPhone, paymentMethod, subtotal, totalAmount, products } = req.body;
 
     if (!products || products.length === 0) {
+      await session.abortTransaction();
+      session.endSession();
       return res.status(400).json({ error: 'Products cannot be empty' });
     }
 
     if (subtotal == null || totalAmount == null) {
+      await session.abortTransaction();
+      session.endSession();
       return res.status(400).json({ error: 'Subtotal and totalAmount required' });
+    }
+
+    // Validate subtotal and totalAmount are numbers
+    const validSubtotal = parseFloat(subtotal);
+    const validTotalAmount = parseFloat(totalAmount);
+    
+    if (isNaN(validSubtotal) || isNaN(validTotalAmount)) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({ error: 'Subtotal and totalAmount must be valid numbers' });
+    }
+    
+    if (validSubtotal < 0 || validTotalAmount < 0) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({ error: 'Subtotal and totalAmount cannot be negative' });
     }
 
     const productUpdates = [];
@@ -248,7 +277,7 @@ router.post('/', async (req, res) => {
       // Build query to find product by attributes (like addItems)
       const query = {
         productType: p.productType || 'Cover',
-        isActive: true
+        $or: [{ isActive: true }, { isActive: { $exists: false } }]
       };
 
       // Add productType-specific fields
@@ -265,9 +294,29 @@ router.post('/', async (req, res) => {
         if (p.bikeName) query.bikeName = p.bikeName; // Form uses bikeName field
       }
 
-      const inventoryItem = await Item.findOne(query).session(session);
+      // Try to find by attributes first
+      let inventoryItem = await Item.findOne(query).session(session);
+      
+      // If not found by attributes, try by name/SKU as fallback
+      if (!inventoryItem && productName) {
+        inventoryItem = await Item.findOne({
+          $and: [
+            {
+              $or: [
+                { name: { $regex: new RegExp(`^${productName}$`, 'i') } },
+                { sku: { $regex: new RegExp(`^${productName}$`, 'i') } }
+              ]
+            },
+            {
+              $or: [{ isActive: true }, { isActive: { $exists: false } }]
+            }
+          ]
+        }).session(session);
+      }
 
       if (!inventoryItem) {
+        await session.abortTransaction();
+        session.endSession();
         return res.status(400).json({ 
           error: `Product not found in inventory`,
           details: `No matching product found for: ${productName || JSON.stringify(query)}`
@@ -275,6 +324,8 @@ router.post('/', async (req, res) => {
       }
 
       if (inventoryItem.quantity < quantity) {
+        await session.abortTransaction();
+        session.endSession();
         return res.status(400).json({
           error: `Insufficient stock for '${productName}'. Available: ${inventoryItem.quantity}`
         });
@@ -302,76 +353,95 @@ router.post('/', async (req, res) => {
     };
 
     // Process products with pricing logic
-    const processedProducts = products.map(p => {
-      const productName = p.productName || p.itemName;
-      const quantity = p.quantity;
-      const basePrice = p.basePrice || p.unitPrice || p.price || 0;
-      const coverType = p.coverType || '';
-      const productType = p.productType || 'Cover';
-      
-      // Calculate bulk discount if applicable
-      let discountAmount = 0;
-      let discountType = 'none';
-      
-      if (productType === 'Cover' && coverType) {
-        const bulkDiscount = calculateBulkDiscount(coverType, quantity, basePrice);
-        if (bulkDiscount > 0) {
-          discountAmount = bulkDiscount;
-          discountType = 'bulk';
+    const processedProducts = products.map((p, index) => {
+      try {
+        const productName = p.productName || p.itemName;
+        const quantity = parseInt(p.quantity) || 0;
+        const basePrice = parseFloat(p.basePrice) || parseFloat(p.unitPrice) || parseFloat(p.price) || 0;
+        const coverType = p.coverType || '';
+        const productType = p.productType || 'Cover';
+        
+        // Validate required fields
+        if (quantity <= 0) {
+          throw new Error(`Product ${index + 1}: Quantity must be greater than 0`);
         }
-      }
-      
-      // Manual discount/override (if admin manually adjusted price)
-      const finalUnitPrice = p.unitPrice !== undefined ? p.unitPrice : (basePrice - discountAmount);
-      
-      // If unitPrice was manually set, it's a manual override
-      if (p.unitPrice !== undefined && p.unitPrice !== (basePrice - discountAmount)) {
-        discountType = 'manual';
-        discountAmount = basePrice - finalUnitPrice;
-      }
-      
-      // Generate productName if not provided (from productType and other fields)
-      let finalProductName = productName;
-      if (!finalProductName || finalProductName.trim() === '') {
+        if (basePrice < 0) {
+          throw new Error(`Product ${index + 1}: Base price cannot be negative`);
+        }
+        
+        // Calculate bulk discount if applicable
+        let discountAmount = 0;
+        let discountType = 'none';
+        
         if (productType === 'Cover' && coverType) {
-          finalProductName = `${productType} - ${coverType}`;
-        } else if (productType === 'Plate' && p.plateType) {
-          finalProductName = `${productType} - ${p.plateType}${p.bikeName ? ` (${p.bikeName})` : ''}`;
-        } else if (productType === 'Form' && p.formVariant) {
-          finalProductName = `${productType} - ${p.formVariant}${p.formCompany ? ` (${p.formCompany})` : ''}`;
-        } else {
-          finalProductName = productType || 'Product';
+          const bulkDiscount = calculateBulkDiscount(coverType, quantity, basePrice);
+          if (bulkDiscount > 0) {
+            discountAmount = bulkDiscount;
+            discountType = 'bulk';
+          }
         }
+        
+        // Manual discount/override (if admin manually adjusted price)
+        const finalUnitPrice = p.unitPrice !== undefined ? parseFloat(p.unitPrice) : (basePrice - discountAmount);
+        
+        // If unitPrice was manually set, it's a manual override
+        if (p.unitPrice !== undefined && Math.abs(p.unitPrice - (basePrice - discountAmount)) > 0.01) {
+          discountType = 'manual';
+          discountAmount = Math.max(0, basePrice - finalUnitPrice);
+        }
+        
+        // Ensure finalUnitPrice is not negative
+        const safeUnitPrice = Math.max(0, finalUnitPrice);
+        const totalDiscount = discountAmount * quantity;
+        const totalPrice = quantity * safeUnitPrice;
+        
+        // Generate productName if not provided (from productType and other fields)
+        let finalProductName = productName;
+        if (!finalProductName || finalProductName.trim() === '') {
+          if (productType === 'Cover' && coverType) {
+            finalProductName = `${productType} - ${coverType}`;
+          } else if (productType === 'Plate' && p.plateType) {
+            finalProductName = `${productType} - ${p.plateType}${p.bikeName ? ` (${p.bikeName})` : ''}`;
+          } else if (productType === 'Form' && p.formVariant) {
+            finalProductName = `${productType} - ${p.formVariant}${p.formCompany ? ` (${p.formCompany})` : ''}`;
+          } else {
+            finalProductName = productType || 'Product';
+          }
+        }
+        
+        return {
+          productName: finalProductName,
+          productType,
+          coverType: coverType || '',
+          plateCompany: p.plateCompany || '',
+          bikeName: p.bikeName || '',
+          plateType: p.plateType || '',
+          formCompany: p.formCompany || '',
+          formType: p.formType || '',
+          formVariant: p.formVariant || '',
+          quantity,
+          basePrice: Math.max(0, basePrice),
+          unitPrice: safeUnitPrice,
+          discountAmount: totalDiscount,
+          discountType,
+          totalPrice,
+          category: p.category || '',
+          subcategory: p.subcategory || '',
+          company: p.company || ''
+        };
+      } catch (err) {
+        throw new Error(`Error processing product ${index + 1}: ${err.message}`);
       }
-      
-      return {
-        productName: finalProductName,
-        productType,
-        coverType,
-        plateCompany: p.plateCompany || '',
-        bikeName: p.bikeName || '',
-        plateType: p.plateType || '',
-        formCompany: p.formCompany || '',
-        formType: p.formType || '',
-        formVariant: p.formVariant || '',
-        quantity,
-        basePrice,
-        unitPrice: finalUnitPrice,
-        discountAmount: discountAmount * quantity, // Total discount for all items
-        discountType,
-        totalPrice: quantity * finalUnitPrice,
-        category: p.category || '',
-        subcategory: p.subcategory || '',
-        company: p.company || ''
-      };
     });
 
     // create slip
     const newSlip = new Slip({
       customerName: customerName || 'Walk-in Customer',
+      customerPhone: customerPhone || '',
+      paymentMethod: paymentMethod || 'Cash',
       products: processedProducts,
-      subtotal,
-      totalAmount,
+      subtotal: validSubtotal,
+      totalAmount: validTotalAmount,
       status: 'Paid'
     });
 
@@ -386,27 +456,14 @@ router.post('/', async (req, res) => {
 
     await newSlip.save({ session });
 
+    // Save slip first to get slipNumber
     // income record with slipId reference
     const incomeRecord = new Income({
       date: new Date(),
-      totalIncome: totalAmount,
-      productsSold: newSlip.products.map(p => {
-        // Generate productName if not provided
-        let productName = p.productName;
-        if (!productName || productName.trim() === '') {
-          if (p.productType === 'Cover' && p.coverType) {
-            productName = `${p.productType} - ${p.coverType}`;
-          } else if (p.productType === 'Plate' && p.plateType) {
-            productName = `${p.productType} - ${p.plateType}${p.bikeName ? ` (${p.bikeName})` : ''}`;
-          } else if (p.productType === 'Form' && p.formVariant) {
-            productName = `${p.productType} - ${p.formVariant}${p.formCompany ? ` (${p.formCompany})` : ''}`;
-          } else {
-            productName = p.productType || 'Product';
-          }
-        }
-        
+      totalIncome: validTotalAmount,
+      productsSold: processedProducts.map(p => {
         return {
-          productName,
+          productName: p.productName,
           sku: p.sku || '',
           productType: p.productType || 'Cover',
           coverType: p.coverType || '',
@@ -425,10 +482,11 @@ router.post('/', async (req, res) => {
         };
       }),
       customerName: newSlip.customerName,
+      customerPhone: newSlip.customerPhone || '',
       paymentMethod: newSlip.paymentMethod || 'Cash',
-      slipNumber: newSlip.slipNumber,
+      slipNumber: newSlip.slipNumber || newSlip._id.toString(),
       slipId: newSlip._id,
-      notes: `Sale from slip ${newSlip.slipNumber}`
+      notes: `Sale from slip ${newSlip.slipNumber || newSlip._id}`
     });
 
     await incomeRecord.save({ session });
@@ -444,8 +502,27 @@ router.post('/', async (req, res) => {
   } catch (err) {
     await session.abortTransaction();
     session.endSession();
+    
+    console.error('❌ Error creating slip:', err);
+    console.error('❌ Error stack:', err.stack);
+    console.error('❌ Request body:', JSON.stringify(req.body, null, 2));
+    
+    // Provide more detailed error message
+    let errorMessage = 'Failed to create slip';
+    if (err.name === 'ValidationError') {
+      errorMessage = `Validation error: ${err.message}`;
+    } else if (err.name === 'MongoServerSelectionError') {
+      errorMessage = 'Database connection error. Please try again.';
+    } else if (err.message) {
+      errorMessage = err.message;
+    }
 
-    res.status(500).json({ error: 'Failed to create slip', details: err.message });
+    res.status(500).json({ 
+      error: errorMessage, 
+      details: err.message,
+      errorType: err.name,
+      stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+    });
   }
 });
 
