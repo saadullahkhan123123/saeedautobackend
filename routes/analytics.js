@@ -69,13 +69,19 @@ router.get('/dashboard', async (req, res) => {
 
     // Today's slips and revenue
     const todaySlips = await Slip.countDocuments({
-      createdAt: { $gte: today, $lt: tomorrow }
+      $or: [
+        { createdAt: { $gte: today, $lt: tomorrow } },
+        { date: { $gte: today, $lt: tomorrow } }
+      ]
     }).maxTimeMS(10000);
 
     const todayRevenueResult = await Slip.aggregate([
       { 
         $match: { 
-          createdAt: { $gte: today, $lt: tomorrow },
+          $or: [
+            { createdAt: { $gte: today, $lt: tomorrow } },
+            { date: { $gte: today, $lt: tomorrow } }
+          ],
           status: { $ne: 'Cancelled' },
           totalAmount: { $exists: true, $ne: null }
         } 
@@ -98,9 +104,9 @@ router.get('/dashboard', async (req, res) => {
 
     // Recent sales activity
     const recentSales = await Slip.find()
-      .sort({ createdAt: -1 })
+      .sort({ createdAt: -1, date: -1 })
       .limit(10)
-      .select('slipNumber totalAmount customerName createdAt status paymentMethod')
+      .select('slipNumber totalAmount customerName createdAt date status paymentMethod')
       .maxTimeMS(10000)
       .lean();
 
@@ -132,7 +138,10 @@ router.get('/dashboard', async (req, res) => {
     const monthlyRevenueResult = await Slip.aggregate([
       { 
         $match: { 
-          createdAt: { $gte: currentMonth },
+          $or: [
+            { createdAt: { $gte: currentMonth } },
+            { date: { $gte: currentMonth } }
+          ],
           status: { $ne: 'Cancelled' },
           totalAmount: { $exists: true, $ne: null }
         } 
@@ -153,7 +162,10 @@ router.get('/dashboard', async (req, res) => {
     const yearlyRevenueResult = await Slip.aggregate([
       { 
         $match: { 
-          createdAt: { $gte: currentYear },
+          $or: [
+            { createdAt: { $gte: currentYear } },
+            { date: { $gte: currentYear } }
+          ],
           status: { $ne: 'Cancelled' },
           totalAmount: { $exists: true, $ne: null }
         } 
@@ -255,7 +267,10 @@ router.get('/sales-trends', async (req, res) => {
     const salesTrends = await Slip.aggregate([
       {
         $match: {
-          createdAt: { $gte: startDate, $exists: true },
+          $or: [
+            { createdAt: { $gte: startDate, $exists: true } },
+            { date: { $gte: startDate, $exists: true } }
+          ],
           status: { $ne: 'Cancelled' },
           totalAmount: { $exists: true, $ne: null }
         }
@@ -266,7 +281,7 @@ router.get('/sales-trends', async (req, res) => {
             date: { 
               $dateToString: { 
                 format: groupFormat, 
-                date: { $ifNull: ['$createdAt', new Date()] },
+                date: { $ifNull: ['$createdAt', { $ifNull: ['$date', new Date()] }] },
                 timezone: 'UTC'
               } 
             }
