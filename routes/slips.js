@@ -237,7 +237,7 @@ router.post('/', async (req, res) => {
       });
     }
 
-    const { customerName, customerPhone, paymentMethod, subtotal, totalAmount, products } = req.body;
+    const { customerName, customerPhone, paymentMethod, subtotal, totalAmount, discount = 0, products } = req.body;
 
     if (!products || products.length === 0) {
       await session.abortTransaction();
@@ -434,14 +434,38 @@ router.post('/', async (req, res) => {
       }
     });
 
+    // Calculate customer balance for Udhar payments
+    let previousBalance = 0;
+    let currentBalance = 0;
+    
+    if (paymentMethod === 'Udhar' && customerName && customerName.trim() !== 'Walk Customer') {
+      // Calculate previous balance from all unpaid Udhar slips
+      const previousSlips = await Slip.find({
+        customerName: customerName.trim(),
+        paymentMethod: 'Udhar',
+        status: { $ne: 'Cancelled' }
+      }).session(session);
+      
+      previousBalance = previousSlips.reduce((sum, slip) => {
+        return sum + (slip.totalAmount || 0) - (slip.discount || 0);
+      }, 0);
+      
+      // Current balance = previous balance + current slip amount (after discount)
+      const discountAmount = parseFloat(discount) || 0;
+      currentBalance = previousBalance + (validTotalAmount - discountAmount);
+    }
+
     // create slip
     const newSlip = new Slip({
-      customerName: customerName || 'Walk-in Customer',
+      customerName: customerName || 'Walk Customer',
       customerPhone: customerPhone || '',
       paymentMethod: paymentMethod || 'Cash',
       products: processedProducts,
       subtotal: validSubtotal,
+      discount: parseFloat(discount) || 0,
       totalAmount: validTotalAmount,
+      previousBalance: previousBalance,
+      currentBalance: currentBalance,
       status: 'Paid'
     });
 
@@ -547,7 +571,6 @@ router.put('/:id', async (req, res) => {
       products,
       subtotal, 
       totalAmount, 
-      tax,
       discount,
       status 
     } = req.body;
@@ -631,6 +654,30 @@ router.put('/:id', async (req, res) => {
       }
     }
 
+    // Calculate customer balance for Udhar payments if payment method or customer changed
+    let previousBalance = existingSlip.previousBalance || 0;
+    let currentBalance = existingSlip.currentBalance || 0;
+    
+    if ((paymentMethod === 'Udhar' || existingSlip.paymentMethod === 'Udhar') && customerName && customerName.trim() !== 'Walk Customer') {
+      const customerNameToUse = customerName || existingSlip.customerName;
+      // Calculate previous balance from all unpaid Udhar slips (excluding current slip)
+      const previousSlips = await Slip.find({
+        customerName: customerNameToUse.trim(),
+        paymentMethod: 'Udhar',
+        status: { $ne: 'Cancelled' },
+        _id: { $ne: existingSlip._id }
+      }).session(session);
+      
+      previousBalance = previousSlips.reduce((sum, slip) => {
+        return sum + (slip.totalAmount || 0) - (slip.discount || 0);
+      }, 0);
+      
+      // Current balance = previous balance + current slip amount (after discount)
+      const discountAmount = parseFloat(discount) !== undefined ? parseFloat(discount) : (existingSlip.discount || 0);
+      const finalTotal = totalAmount !== undefined ? parseFloat(totalAmount) : existingSlip.totalAmount;
+      currentBalance = previousBalance + (finalTotal - discountAmount);
+    }
+
     // Update slip with all fields
     const updateData = {};
     if (customerName !== undefined) updateData.customerName = customerName;
@@ -639,9 +686,10 @@ router.put('/:id', async (req, res) => {
     if (notes !== undefined) updateData.notes = notes;
     if (subtotal !== undefined) updateData.subtotal = subtotal;
     if (totalAmount !== undefined) updateData.totalAmount = totalAmount;
-    if (tax !== undefined) updateData.tax = tax;
-    if (discount !== undefined) updateData.discount = discount;
+    if (discount !== undefined) updateData.discount = parseFloat(discount) || 0;
     if (status !== undefined) updateData.status = status;
+    updateData.previousBalance = previousBalance;
+    updateData.currentBalance = currentBalance;
     // Helper function for bulk discount (same as in POST)
     const calculateBulkDiscount = (coverType, quantity, basePrice) => {
       const bulkDiscountTypes = [

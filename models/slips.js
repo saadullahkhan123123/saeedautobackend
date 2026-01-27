@@ -52,13 +52,20 @@ const SlipSchema = new mongoose.Schema({
     default: ''
   },
 
-  tax: {
+  discount: {
     type: Number,
     default: 0,
     min: 0
   },
 
-  discount: {
+  // Customer balance tracking for Udhar payments
+  previousBalance: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
+
+  currentBalance: {
     type: Number,
     default: 0,
     min: 0
