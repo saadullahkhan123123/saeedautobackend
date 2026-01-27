@@ -400,71 +400,118 @@ router.put('/:id', async (req, res) => {
       costPrice
     } = req.body;
 
-    // Validation
-    if (quantity < 0 || price < 0 || costPrice < 0) {
-      return res.status(400).json({ error: 'Quantity, price, and cost price must be non-negative' });
+    // Get existing item to preserve values if not provided
+    const existingItem = await Item.findById(req.params.id);
+    if (!existingItem) {
+      return res.status(404).json({ error: 'Item not found' });
     }
 
-    // Validation: If productType is Cover, coverType is required
-    if (productType === 'Cover' && !coverType) {
+    // Validation
+    if (quantity !== undefined && quantity < 0) {
+      return res.status(400).json({ error: 'Quantity must be non-negative' });
+    }
+    if (price !== undefined && price < 0) {
+      return res.status(400).json({ error: 'Price must be non-negative' });
+    }
+    if (costPrice !== undefined && costPrice < 0) {
+      return res.status(400).json({ error: 'Cost price must be non-negative' });
+    }
+
+    // Use existing values if not provided (for partial updates like quantity/price only)
+    const finalProductType = productType !== undefined ? productType : existingItem.productType;
+    const finalCoverType = coverType !== undefined ? coverType : existingItem.coverType;
+    const finalPlateCompany = plateCompany !== undefined ? plateCompany : existingItem.plateCompany;
+    const finalBikeName = bikeName !== undefined ? bikeName : existingItem.bikeName;
+    const finalPlateType = plateType !== undefined ? plateType : existingItem.plateType;
+    const finalFormCompany = formCompany !== undefined ? formCompany : existingItem.formCompany;
+    const finalFormType = formType !== undefined ? formType : existingItem.formType;
+    const finalFormVariant = formVariant !== undefined ? formVariant : existingItem.formVariant;
+
+    // Validation: If productType is Cover, coverType is required (only validate if productType is being changed)
+    if (finalProductType === 'Cover' && !finalCoverType && productType !== undefined) {
       return res.status(400).json({ error: 'Cover Type is required when Product Type is Cover' });
     }
 
-    // Validation: If productType is Plate, validate required fields
-    if (productType === 'Plate') {
-      if (bikeName === 'Plastic Plate') {
+    // Validation: If productType is Plate, validate required fields (only if productType is being changed)
+    if (finalProductType === 'Plate' && productType !== undefined) {
+      if (finalBikeName === 'Plastic Plate') {
         // Plastic Plate is standalone
       } else {
-        if (!bikeName) {
+        if (!finalBikeName) {
           return res.status(400).json({ error: 'Bike Name is required for Plate products (except Plastic Plate)' });
         }
-        if (!plateType) {
+        if (!finalPlateType) {
           return res.status(400).json({ error: 'Plate Type is required for Plate products (except Plastic Plate)' });
         }
-        if (bikeName === '70' && !plateCompany) {
+        if (finalBikeName === '70' && !finalPlateCompany) {
           return res.status(400).json({ error: 'Company is required for Bike 70' });
         }
       }
     }
 
-    // Validation: If productType is Form, validate required fields
-    if (productType === 'Form') {
-      if (!formCompany) {
+    // Validation: If productType is Form, validate required fields (only if productType is being changed)
+    if (finalProductType === 'Form' && productType !== undefined) {
+      if (!finalFormCompany) {
         return res.status(400).json({ error: 'Company is required for Form products' });
       }
-      if (!formType) {
+      if (!finalFormType) {
         return res.status(400).json({ error: 'Form Type is required for Form products' });
       }
-      if (!formVariant) {
+      if (!finalFormVariant) {
         return res.status(400).json({ error: 'Form Variant is required for Form products' });
       }
     }
 
+    // Build update object - only update fields that are provided
+    const updateData = {};
+    if (name !== undefined) updateData.name = name.trim();
+    if (productType !== undefined) updateData.productType = productType;
+    if (quantity !== undefined) updateData.quantity = quantity;
+    if (price !== undefined) updateData.price = price;
+    if (basePrice !== undefined) updateData.basePrice = basePrice;
+    if (costPrice !== undefined) updateData.costPrice = costPrice;
+    if (category !== undefined) updateData.category = category;
+    if (subcategory !== undefined) updateData.subcategory = subcategory;
+    if (company !== undefined) updateData.company = company;
+    if (description !== undefined) updateData.description = description;
+    if (minStockLevel !== undefined) updateData.minStockLevel = minStockLevel;
+    if (maxStockLevel !== undefined) updateData.maxStockLevel = maxStockLevel;
+    if (supplier !== undefined) updateData.supplier = supplier;
+    updateData.lastUpdated = new Date();
+
+    // Product type specific fields - preserve existing if not provided
+    if (finalProductType === 'Cover') {
+      updateData.coverType = finalCoverType || '';
+      // Clear other product type fields
+      updateData.plateCompany = '';
+      updateData.bikeName = '';
+      updateData.plateType = '';
+      updateData.formCompany = '';
+      updateData.formType = '';
+      updateData.formVariant = '';
+    } else if (finalProductType === 'Plate') {
+      updateData.plateCompany = finalPlateCompany || '';
+      updateData.bikeName = finalBikeName || '';
+      updateData.plateType = finalPlateType || '';
+      // Clear other product type fields
+      updateData.coverType = '';
+      updateData.formCompany = '';
+      updateData.formType = '';
+      updateData.formVariant = '';
+    } else if (finalProductType === 'Form') {
+      updateData.formCompany = finalFormCompany || '';
+      updateData.formType = finalFormType || '';
+      updateData.formVariant = finalFormVariant || '';
+      // Clear other product type fields
+      updateData.coverType = '';
+      updateData.plateCompany = '';
+      updateData.bikeName = '';
+      updateData.plateType = '';
+    }
+
     const updatedItem = await Item.findByIdAndUpdate(
       req.params.id,
-      {
-        name: name?.trim(),
-        productType: productType || 'Cover',
-        coverType: productType === 'Cover' ? (coverType || '') : '',
-        plateCompany: productType === 'Plate' ? (plateCompany || '') : '',
-        bikeName: productType === 'Plate' ? (bikeName || '') : '',
-        plateType: productType === 'Plate' ? (plateType || '') : '',
-        formCompany: productType === 'Form' ? (formCompany || '') : '',
-        formType: productType === 'Form' ? (formType || '') : '',
-        formVariant: productType === 'Form' ? (formVariant || '') : '',
-        category: category || 'General',
-        subcategory: subcategory || '',
-        company: company || '',
-        quantity,
-        price,
-        basePrice: basePrice !== undefined ? basePrice : price,
-        costPrice: costPrice || 0,
-        description: description || '',
-        minStockLevel: minStockLevel || 10,
-        maxStockLevel: maxStockLevel || 1000,
-        supplier: supplier || '',
-        lastUpdated: new Date()
-      },
+      updateData,
       { new: true, runValidators: true }
     );
 
