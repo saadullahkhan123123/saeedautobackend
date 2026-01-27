@@ -61,7 +61,7 @@ router.get('/dashboard', async (req, res) => {
 
     const totalRevenue = totalRevenueResult[0]?.total || 0;
 
-    // Today's date calculati
+    // Today's date calculation
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const tomorrow = new Date(today);
@@ -276,12 +276,17 @@ router.get('/sales-trends', async (req, res) => {
         }
       },
       {
+        $addFields: {
+          dateField: { $ifNull: ['$createdAt', { $ifNull: ['$date', new Date()] }] }
+        }
+      },
+      {
         $group: {
           _id: {
             date: { 
               $dateToString: { 
                 format: groupFormat, 
-                date: { $ifNull: ['$createdAt', { $ifNull: ['$date', new Date()] }] },
+                date: '$dateField',
                 timezone: 'UTC'
               } 
             }
@@ -333,7 +338,10 @@ router.get('/top-products', async (req, res) => {
       const days = period === 'week' ? 7 : period === 'month' ? 30 : 365;
       const startDate = new Date();
       startDate.setDate(startDate.getDate() - days);
-      matchStage.createdAt = { $gte: startDate, $exists: true };
+      matchStage.$or = [
+        { createdAt: { $gte: startDate, $exists: true } },
+        { date: { $gte: startDate, $exists: true } }
+      ];
     }
 
     const topProducts = await Slip.aggregate([
