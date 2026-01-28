@@ -478,40 +478,69 @@ router.post('/', async (req, res) => {
       );
     }
 
+    // Save slip first to get slipNumber (generated in pre-save hook)
     await newSlip.save({ session });
 
-    // Save slip first to get slipNumber
-    // income record with slipId reference
+    // Create income record with slipId reference
+    // Ensure all required fields are present and valid
+    const incomeProducts = processedProducts.map(p => {
+      // Ensure quantity, unitPrice, and totalPrice are valid numbers
+      const qty = parseInt(p.quantity) || 1;
+      const unitPrice = parseFloat(p.unitPrice) || parseFloat(p.basePrice) || 0;
+      const totalPrice = parseFloat(p.totalPrice) || (qty * unitPrice);
+      
+      // Validate product data
+      if (qty < 1) {
+        throw new Error(`Invalid quantity for product: ${p.productName || 'Unknown'}`);
+      }
+      if (unitPrice < 0) {
+        throw new Error(`Invalid unit price for product: ${p.productName || 'Unknown'}`);
+      }
+      if (totalPrice < 0) {
+        throw new Error(`Invalid total price for product: ${p.productName || 'Unknown'}`);
+      }
+      
+      return {
+        productName: (p.productName || 'Unknown Product').trim(),
+        productType: p.productType || 'Cover',
+        coverType: (p.coverType || '').trim(),
+        plateCompany: (p.plateCompany || '').trim(),
+        bikeName: (p.bikeName || '').trim(),
+        plateType: (p.plateType || '').trim(),
+        formCompany: (p.formCompany || '').trim(),
+        formType: (p.formType || '').trim(),
+        formVariant: (p.formVariant || '').trim(),
+        quantity: qty,
+        unitPrice: unitPrice,
+        totalPrice: totalPrice,
+        category: (p.category || '').trim(),
+        subcategory: (p.subcategory || '').trim(),
+        company: (p.company || '').trim()
+      };
+    });
+
+    // Validate total income
+    if (validTotalAmount < 0) {
+      throw new Error('Total amount cannot be negative');
+    }
+
     const incomeRecord = new Income({
       date: new Date(),
       totalIncome: validTotalAmount,
-      productsSold: processedProducts.map(p => {
-        return {
-          productName: p.productName,
-          sku: p.sku || '',
-          productType: p.productType || 'Cover',
-          coverType: p.coverType || '',
-          plateCompany: p.plateCompany || '',
-          bikeName: p.bikeName || '',
-          plateType: p.plateType || '',
-          formCompany: p.formCompany || '',
-          formType: p.formType || '',
-          formVariant: p.formVariant || '',
-          quantity: p.quantity,
-          unitPrice: p.unitPrice,
-          totalPrice: p.totalPrice,
-          category: p.category || '',
-          subcategory: p.subcategory || '',
-          company: p.company || ''
-        };
-      }),
-      customerName: newSlip.customerName,
-      customerPhone: newSlip.customerPhone || '',
+      productsSold: incomeProducts,
+      customerName: (newSlip.customerName || 'Walk Customer').trim(),
+      customerPhone: (newSlip.customerPhone || '').trim(),
       paymentMethod: newSlip.paymentMethod || 'Cash',
-      slipNumber: newSlip.slipNumber || newSlip._id.toString(),
+      slipNumber: (newSlip.slipNumber || newSlip._id.toString()).trim(),
       slipId: newSlip._id,
       notes: `Sale from slip ${newSlip.slipNumber || newSlip._id}`
     });
+
+    // Validate income record before saving
+    const incomeValidationError = incomeRecord.validateSync();
+    if (incomeValidationError) {
+      throw new Error(`Income validation failed: ${incomeValidationError.message}`);
+    }
 
     await incomeRecord.save({ session });
 
@@ -528,23 +557,35 @@ router.post('/', async (req, res) => {
     session.endSession();
     
     console.error('❌ Error creating slip:', err);
+    console.error('❌ Error name:', err.name);
+    console.error('❌ Error message:', err.message);
     console.error('❌ Error stack:', err.stack);
+    if (err.errors) {
+      console.error('❌ Validation errors:', JSON.stringify(err.errors, null, 2));
+    }
     console.error('❌ Request body:', JSON.stringify(req.body, null, 2));
     
     // Provide more detailed error message
     let errorMessage = 'Failed to create slip';
+    let errorDetails = err.message;
+    
     if (err.name === 'ValidationError') {
-      errorMessage = `Validation error: ${err.message}`;
-    } else if (err.name === 'MongoServerSelectionError') {
+      const validationErrors = Object.values(err.errors || {}).map(e => e.message).join(', ');
+      errorMessage = `Validation error: ${validationErrors || err.message}`;
+      errorDetails = validationErrors || err.message;
+    } else if (err.name === 'MongoServerSelectionError' || err.name === 'MongoNetworkError') {
       errorMessage = 'Database connection error. Please try again.';
+      errorDetails = 'Unable to connect to database. Please check your connection.';
     } else if (err.message) {
       errorMessage = err.message;
+      errorDetails = err.message;
     }
 
     res.status(500).json({ 
       error: errorMessage, 
-      details: err.message,
+      details: errorDetails,
       errorType: err.name,
+      validationErrors: err.errors ? Object.keys(err.errors) : undefined,
       stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
     });
   }
