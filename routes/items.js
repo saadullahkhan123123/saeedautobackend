@@ -5,22 +5,43 @@ const Item = require('../models/items');
 
 // Helper function to ensure MongoDB connection
 const ensureConnection = async () => {
+  // If already connected, return true
   if (mongoose.connection.readyState === 1) {
     return true;
   }
-  if (mongoose.connection.readyState === 0) {
+  
+  // If connecting, wait for it to complete
+  if (mongoose.connection.readyState === 2) {
+    // Wait up to 10 seconds for connection to complete
+    const maxWait = 10000;
+    const startTime = Date.now();
+    while (mongoose.connection.readyState === 2 && (Date.now() - startTime) < maxWait) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    if (mongoose.connection.readyState === 1) {
+      return true;
+    }
+  }
+  
+  // If disconnected, try to connect
+  if (mongoose.connection.readyState === 0 || mongoose.connection.readyState === 3) {
     try {
       await mongoose.connect(process.env.MONGO_URI, {
         serverSelectionTimeoutMS: 10000,
         socketTimeoutMS: 45000,
         connectTimeoutMS: 10000,
+        bufferCommands: true, // Enable buffering to prevent errors
+        bufferMaxEntries: 0, // Unlimited buffer
       });
-      return true;
+      // Wait a bit to ensure connection is fully established
+      await new Promise(resolve => setTimeout(resolve, 100));
+      return mongoose.connection.readyState === 1;
     } catch (err) {
       console.error('❌ Failed to connect to MongoDB:', err.message);
       return false;
     }
   }
+  
   return false;
 };
 
@@ -97,6 +118,16 @@ router.get('/', async (req, res) => {
 // GET /api/items/low-stock - Get low stock items
 router.get('/low-stock', async (req, res) => {
   try {
+    const isConnected = await ensureConnection();
+    if (!isConnected) {
+      return res.status(503).json({ 
+        error: 'Database connection unavailable', 
+        details: 'Please try again in a moment',
+        items: [],
+        total: 0
+      });
+    }
+
     const lowStockItems = await Item.find({
       quantity: { $lte: 10 },
       isActive: true
@@ -118,6 +149,16 @@ router.get('/low-stock', async (req, res) => {
 // GET /api/items/out-of-stock - Get out of stock items
 router.get('/out-of-stock', async (req, res) => {
   try {
+    const isConnected = await ensureConnection();
+    if (!isConnected) {
+      return res.status(503).json({ 
+        error: 'Database connection unavailable', 
+        details: 'Please try again in a moment',
+        items: [],
+        total: 0
+      });
+    }
+
     const outOfStockItems = await Item.find({
       quantity: 0,
       isActive: true
@@ -139,6 +180,14 @@ router.get('/out-of-stock', async (req, res) => {
 // GET /api/items/:id - Get single item by ID
 router.get('/:id', async (req, res) => {
   try {
+    const isConnected = await ensureConnection();
+    if (!isConnected) {
+      return res.status(503).json({ 
+        error: 'Database connection unavailable', 
+        details: 'Please try again in a moment' 
+      });
+    }
+
     const item = await Item.findById(req.params.id);
     
     if (!item) {
@@ -167,6 +216,15 @@ router.get('/:id', async (req, res) => {
 // POST /api/items - Create new item
 router.post('/', async (req, res) => {
   try {
+    // Ensure MongoDB connection before proceeding
+    const isConnected = await ensureConnection();
+    if (!isConnected) {
+      return res.status(503).json({ 
+        error: 'Database connection unavailable', 
+        details: 'Please try again in a moment' 
+      });
+    }
+
     console.log('📦 Received item creation request:', JSON.stringify(req.body, null, 2));
     
     const { 
@@ -352,6 +410,15 @@ router.post('/', async (req, res) => {
     console.error('❌ Error name:', error.name);
     console.error('❌ Error message:', error.message);
     
+    // Handle MongoDB connection errors
+    if (error.name === 'MongooseError' && error.message.includes('initial connection')) {
+      return res.status(503).json({ 
+        error: 'Database connection error',
+        details: 'Please wait a moment and try again. The database is connecting.',
+        errorName: error.name
+      });
+    }
+    
     if (error.code === 11000) {
       return res.status(400).json({ error: 'SKU already exists' });
     }
@@ -377,6 +444,15 @@ router.post('/', async (req, res) => {
 // PUT /api/items/:id - Update item
 router.put('/:id', async (req, res) => {
   try {
+    // Ensure MongoDB connection before proceeding
+    const isConnected = await ensureConnection();
+    if (!isConnected) {
+      return res.status(503).json({ 
+        error: 'Database connection unavailable', 
+        details: 'Please try again in a moment' 
+      });
+    }
+
     const { 
       name, 
       productType,
@@ -577,6 +653,15 @@ router.patch('/:id/stock', async (req, res) => {
 // DELETE /api/items/:id - Soft delete item
 router.delete('/:id', async (req, res) => {
   try {
+    // Ensure MongoDB connection before proceeding
+    const isConnected = await ensureConnection();
+    if (!isConnected) {
+      return res.status(503).json({ 
+        error: 'Database connection unavailable', 
+        details: 'Please try again in a moment' 
+      });
+    }
+
     const deletedItem = await Item.findByIdAndUpdate(
       req.params.id,
       { isActive: false, lastUpdated: new Date() },
