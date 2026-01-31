@@ -6,85 +6,41 @@ const Slip = require('../models/slips');
 const Income = require('../models/income');
 
 // Helper function to ensure MongoDB connection
+// Note: We don't try to reconnect here - the main app handles that
+// We just check if connection is ready and wait if it's connecting
 const ensureConnection = async () => {
-  // If already connected, return true
+  // If already connected, return true immediately
   if (mongoose.connection.readyState === 1) {
     return true;
   }
   
-  // If connecting, wait for it to complete
+  // If connecting, wait for it to complete (up to 20 seconds)
   if (mongoose.connection.readyState === 2) {
-    // Wait up to 15 seconds for connection to complete
-    const maxWait = 15000;
+    const maxWait = 20000;
     const startTime = Date.now();
+    const checkInterval = 200; // Check every 200ms
+    
     while (mongoose.connection.readyState === 2 && (Date.now() - startTime) < maxWait) {
-      await new Promise(resolve => setTimeout(resolve, 200));
+      await new Promise(resolve => setTimeout(resolve, checkInterval));
+      
+      // Check if connection succeeded
+      if (mongoose.connection.readyState === 1) {
+        return true;
+      }
     }
+    
+    // If we're still connecting after maxWait, check one more time
     if (mongoose.connection.readyState === 1) {
       return true;
     }
   }
   
-  // If disconnected, try to connect with retry logic
+  // If disconnected (readyState 0 or 3), don't try to reconnect
+  // The main app's connection handler will handle reconnection
+  // Just return false and let the route return fallback data
   if (mongoose.connection.readyState === 0 || mongoose.connection.readyState === 3) {
-    const maxRetries = 3;
-    let retryCount = 0;
-    
-    while (retryCount < maxRetries) {
-      try {
-        // Check if already connected before attempting
-        if (mongoose.connection.readyState === 1) {
-          return true;
-        }
-        
-        // Only connect if not already connected or connecting
-        if (mongoose.connection.readyState === 0 || mongoose.connection.readyState === 3) {
-          // Check if MONGO_URI is available
-          if (!process.env.MONGO_URI) {
-            console.error('❌ MONGO_URI environment variable is not set');
-            return false;
-          }
-          
-          await mongoose.connect(process.env.MONGO_URI, {
-            serverSelectionTimeoutMS: 15000,
-            socketTimeoutMS: 45000,
-            connectTimeoutMS: 15000,
-            bufferCommands: true,
-            bufferMaxEntries: 0,
-            maxPoolSize: 10,
-            retryWrites: true,
-            w: 'majority'
-          });
-        } else if (mongoose.connection.readyState === 1) {
-          // Already connected
-          return true;
-        }
-        
-        // Wait a bit longer to ensure connection is fully established
-        await new Promise(resolve => setTimeout(resolve, 500));
-        
-        // Verify connection is actually established
-        if (mongoose.connection.readyState === 1) {
-          console.log('✅ MongoDB connection established in analytics route');
-          return true;
-        }
-        
-        // If still not connected, wait and retry
-        retryCount++;
-        if (retryCount < maxRetries) {
-          await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
-        }
-      } catch (err) {
-        console.error(`❌ Failed to connect to MongoDB (attempt ${retryCount + 1}/${maxRetries}):`, err.message);
-        retryCount++;
-        if (retryCount < maxRetries) {
-          await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
-        } else {
-          console.error('❌ All connection attempts failed');
-          return false;
-        }
-      }
-    }
+    console.warn(`⚠️ MongoDB connection state: ${mongoose.connection.readyState} (0=disconnected, 3=uninitialized)`);
+    return false;
   }
   
   return false;

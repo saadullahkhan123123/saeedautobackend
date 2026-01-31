@@ -30,39 +30,76 @@ const connectDB = async () => {
       return;
     }
 
+    // Check if MONGO_URI is available
+    if (!process.env.MONGO_URI) {
+      console.error('❌ MONGO_URI environment variable is not set');
+      return;
+    }
+
     const connectionOptions = {
-      serverSelectionTimeoutMS: 10000,
+      serverSelectionTimeoutMS: 20000, // Increased timeout
       socketTimeoutMS: 45000,
-      connectTimeoutMS: 10000,
+      connectTimeoutMS: 20000, // Increased timeout
+      bufferCommands: true,
+      bufferMaxEntries: 0,
+      maxPoolSize: 10,
+      retryWrites: true,
+      w: 'majority'
     };
 
     await mongoose.connect(process.env.MONGO_URI, connectionOptions);
     console.log('✅ MongoDB Atlas connected');
     console.log('📊 Database:', mongoose.connection.db?.databaseName || 'Unknown');
+    console.log('📊 Connection State:', mongoose.connection.readyState);
   } catch (err) {
     console.error('❌ MongoDB connection failed:', err.message);
     console.error('❌ Connection error details:', err);
+    // Don't throw - let the app continue and routes will handle connection errors
   }
 };
 
+// Connect to database
 connectDB();
+
+// Retry connection if it fails
+let retryCount = 0;
+const maxRetries = 5;
+const retryConnection = async () => {
+  if (mongoose.connection.readyState !== 1 && retryCount < maxRetries) {
+    retryCount++;
+    console.log(`🔄 Retrying MongoDB connection (attempt ${retryCount}/${maxRetries})...`);
+    await new Promise(resolve => setTimeout(resolve, 5000 * retryCount)); // Exponential backoff
+    await connectDB();
+  } else if (retryCount >= maxRetries) {
+    console.error('❌ Max retry attempts reached. Connection may be unavailable.');
+  }
+};
 
 // Handle MongoDB connection events
 mongoose.connection.on('error', (err) => {
   console.error('❌ MongoDB connection error:', err);
+  retryCount = 0; // Reset retry count on error
+  retryConnection();
 });
 
 mongoose.connection.on('disconnected', () => {
-  console.warn('⚠️ MongoDB disconnected - attempting reconnect...');
-  setTimeout(() => {
-    if (mongoose.connection.readyState === 0) {
-      connectDB();
-    }
-  }, 5000);
+  console.warn('⚠️ MongoDB disconnected - will retry connection...');
+  retryCount = 0; // Reset retry count
+  retryConnection();
 });
 
 mongoose.connection.on('reconnected', () => {
   console.log('✅ MongoDB reconnected');
+  retryCount = 0; // Reset retry count on successful reconnection
+});
+
+mongoose.connection.on('connecting', () => {
+  console.log('🔄 Connecting to MongoDB...');
+});
+
+mongoose.connection.on('connected', () => {
+  console.log('✅ MongoDB connected successfully');
+  retryCount = 0; // Reset retry count on successful connection
 });
 
 /* -----------------------------------------

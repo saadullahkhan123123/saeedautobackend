@@ -4,42 +4,41 @@ const mongoose = require('mongoose');
 const Item = require('../models/items');
 
 // Helper function to ensure MongoDB connection
+// Note: We don't try to reconnect here - the main app handles that
+// We just check if connection is ready and wait if it's connecting
 const ensureConnection = async () => {
-  // If already connected, return true
+  // If already connected, return true immediately
   if (mongoose.connection.readyState === 1) {
     return true;
   }
   
-  // If connecting, wait for it to complete
+  // If connecting, wait for it to complete (up to 20 seconds)
   if (mongoose.connection.readyState === 2) {
-    // Wait up to 10 seconds for connection to complete
-    const maxWait = 10000;
+    const maxWait = 20000;
     const startTime = Date.now();
+    const checkInterval = 200; // Check every 200ms
+    
     while (mongoose.connection.readyState === 2 && (Date.now() - startTime) < maxWait) {
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise(resolve => setTimeout(resolve, checkInterval));
+      
+      // Check if connection succeeded
+      if (mongoose.connection.readyState === 1) {
+        return true;
+      }
     }
+    
+    // If we're still connecting after maxWait, check one more time
     if (mongoose.connection.readyState === 1) {
       return true;
     }
   }
   
-  // If disconnected, try to connect
+  // If disconnected (readyState 0 or 3), don't try to reconnect
+  // The main app's connection handler will handle reconnection
+  // Just return false and let the route return fallback data
   if (mongoose.connection.readyState === 0 || mongoose.connection.readyState === 3) {
-    try {
-      await mongoose.connect(process.env.MONGO_URI, {
-        serverSelectionTimeoutMS: 10000,
-        socketTimeoutMS: 45000,
-        connectTimeoutMS: 10000,
-        bufferCommands: true, // Enable buffering to prevent errors
-        bufferMaxEntries: 0, // Unlimited buffer
-      });
-      // Wait a bit to ensure connection is fully established
-      await new Promise(resolve => setTimeout(resolve, 100));
-      return mongoose.connection.readyState === 1;
-    } catch (err) {
-      console.error('❌ Failed to connect to MongoDB:', err.message);
-      return false;
-    }
+    console.warn(`⚠️ MongoDB connection state: ${mongoose.connection.readyState} (0=disconnected, 3=uninitialized)`);
+    return false;
   }
   
   return false;
