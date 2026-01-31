@@ -7,22 +7,43 @@ const Income = require('../models/income');
 
 // Helper function to ensure MongoDB connection
 const ensureConnection = async () => {
+  // If already connected, return true
   if (mongoose.connection.readyState === 1) {
     return true;
   }
-  if (mongoose.connection.readyState === 0) {
+  
+  // If connecting, wait for it to complete
+  if (mongoose.connection.readyState === 2) {
+    // Wait up to 10 seconds for connection to complete
+    const maxWait = 10000;
+    const startTime = Date.now();
+    while (mongoose.connection.readyState === 2 && (Date.now() - startTime) < maxWait) {
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    if (mongoose.connection.readyState === 1) {
+      return true;
+    }
+  }
+  
+  // If disconnected, try to connect
+  if (mongoose.connection.readyState === 0 || mongoose.connection.readyState === 3) {
     try {
       await mongoose.connect(process.env.MONGO_URI, {
         serverSelectionTimeoutMS: 10000,
         socketTimeoutMS: 45000,
         connectTimeoutMS: 10000,
+        bufferCommands: true, // Enable buffering to prevent errors
+        bufferMaxEntries: 0, // Unlimited buffer
       });
-      return true;
+      // Wait a bit to ensure connection is fully established
+      await new Promise(resolve => setTimeout(resolve, 100));
+      return mongoose.connection.readyState === 1;
     } catch (err) {
       console.error('❌ Failed to connect to MongoDB:', err.message);
       return false;
     }
   }
+  
   return false;
 };
 
@@ -44,22 +65,27 @@ router.get('/dashboard', async (req, res) => {
     const totalIncomeRecords = await Income.countDocuments({ $or: [{ isActive: true }, { isActive: { $exists: false } }] }).maxTimeMS(10000);
     
     // Revenue calculations - handle null/undefined totalAmount
-    const totalRevenueResult = await Slip.aggregate([
-      { 
-        $match: { 
-          status: { $ne: 'Cancelled' },
-          totalAmount: { $exists: true, $ne: null }
-        } 
-      },
-      { 
-        $group: { 
-          _id: null, 
-          total: { $sum: { $ifNull: ['$totalAmount', 0] } } 
-        } 
-      }
-    ]).maxTimeMS(15000);
-
-    const totalRevenue = totalRevenueResult[0]?.total || 0;
+    let totalRevenue = 0;
+    try {
+      const totalRevenueResult = await Slip.aggregate([
+        { 
+          $match: { 
+            status: { $ne: 'Cancelled' },
+            totalAmount: { $exists: true, $ne: null }
+          } 
+        },
+        { 
+          $group: { 
+            _id: null, 
+            total: { $sum: { $ifNull: ['$totalAmount', 0] } } 
+          } 
+        }
+      ]).maxTimeMS(15000).allowDiskUse(true);
+      totalRevenue = totalRevenueResult[0]?.total || 0;
+    } catch (aggError) {
+      console.error('❌ Error calculating total revenue:', aggError);
+      totalRevenue = 0;
+    }
 
     // Today's date calculation
     const today = new Date();
@@ -75,26 +101,31 @@ router.get('/dashboard', async (req, res) => {
       ]
     }).maxTimeMS(10000);
 
-    const todayRevenueResult = await Slip.aggregate([
-      { 
-        $match: { 
-          $or: [
-            { createdAt: { $gte: today, $lt: tomorrow } },
-            { date: { $gte: today, $lt: tomorrow } }
-          ],
-          status: { $ne: 'Cancelled' },
-          totalAmount: { $exists: true, $ne: null }
-        } 
-      },
-      { 
-        $group: { 
-          _id: null, 
-          total: { $sum: { $ifNull: ['$totalAmount', 0] } } 
-        } 
-      }
-    ]).maxTimeMS(15000);
-
-    const todayRevenue = todayRevenueResult[0]?.total || 0;
+    let todayRevenue = 0;
+    try {
+      const todayRevenueResult = await Slip.aggregate([
+        { 
+          $match: { 
+            $or: [
+              { createdAt: { $gte: today, $lt: tomorrow } },
+              { date: { $gte: today, $lt: tomorrow } }
+            ],
+            status: { $ne: 'Cancelled' },
+            totalAmount: { $exists: true, $ne: null }
+          } 
+        },
+        { 
+          $group: { 
+            _id: null, 
+            total: { $sum: { $ifNull: ['$totalAmount', 0] } } 
+          } 
+        }
+      ]).maxTimeMS(15000).allowDiskUse(true);
+      todayRevenue = todayRevenueResult[0]?.total || 0;
+    } catch (aggError) {
+      console.error('❌ Error calculating today revenue:', aggError);
+      todayRevenue = 0;
+    }
 
     // Low stock items
     const lowStockItems = await Item.countDocuments({ 
@@ -111,21 +142,27 @@ router.get('/dashboard', async (req, res) => {
       .lean();
 
     // Payment method distribution - handle null paymentMethod and totalAmount
-    const paymentMethods = await Slip.aggregate([
-      { 
-        $match: { 
-          status: { $ne: 'Cancelled' },
-          totalAmount: { $exists: true, $ne: null }
-        } 
-      },
-      {
-        $group: {
-          _id: { $ifNull: ['$paymentMethod', 'Cash'] },
-          count: { $sum: 1 },
-          total: { $sum: { $ifNull: ['$totalAmount', 0] } }
+    let paymentMethods = [];
+    try {
+      paymentMethods = await Slip.aggregate([
+        { 
+          $match: { 
+            status: { $ne: 'Cancelled' },
+            totalAmount: { $exists: true, $ne: null }
+          } 
+        },
+        {
+          $group: {
+            _id: { $ifNull: ['$paymentMethod', 'Cash'] },
+            count: { $sum: 1 },
+            total: { $sum: { $ifNull: ['$totalAmount', 0] } }
+          }
         }
-      }
-    ]).maxTimeMS(15000);
+      ]).maxTimeMS(15000).allowDiskUse(true);
+    } catch (aggError) {
+      console.error('❌ Error calculating payment methods:', aggError);
+      paymentMethods = [];
+    }
 
     // Total unique customers
     const uniqueCustomers = await Slip.distinct('customerName').maxTimeMS(10000);
@@ -135,49 +172,61 @@ router.get('/dashboard', async (req, res) => {
     const currentMonth = new Date();
     currentMonth.setDate(1);
     currentMonth.setHours(0, 0, 0, 0);
-    const monthlyRevenueResult = await Slip.aggregate([
-      { 
-        $match: { 
-          $or: [
-            { createdAt: { $gte: currentMonth } },
-            { date: { $gte: currentMonth } }
-          ],
-          status: { $ne: 'Cancelled' },
-          totalAmount: { $exists: true, $ne: null }
-        } 
-      },
-      { 
-        $group: { 
-          _id: null, 
-          total: { $sum: { $ifNull: ['$totalAmount', 0] } } 
-        } 
-      }
-    ]).maxTimeMS(15000);
-    const monthlyRevenue = monthlyRevenueResult[0]?.total || 0;
+    let monthlyRevenue = 0;
+    try {
+      const monthlyRevenueResult = await Slip.aggregate([
+        { 
+          $match: { 
+            $or: [
+              { createdAt: { $gte: currentMonth } },
+              { date: { $gte: currentMonth } }
+            ],
+            status: { $ne: 'Cancelled' },
+            totalAmount: { $exists: true, $ne: null }
+          } 
+        },
+        { 
+          $group: { 
+            _id: null, 
+            total: { $sum: { $ifNull: ['$totalAmount', 0] } } 
+          } 
+        }
+      ]).maxTimeMS(15000).allowDiskUse(true);
+      monthlyRevenue = monthlyRevenueResult[0]?.total || 0;
+    } catch (aggError) {
+      console.error('❌ Error calculating monthly revenue:', aggError);
+      monthlyRevenue = 0;
+    }
 
     // Yearly revenue
     const currentYear = new Date();
     currentYear.setMonth(0, 1);
     currentYear.setHours(0, 0, 0, 0);
-    const yearlyRevenueResult = await Slip.aggregate([
-      { 
-        $match: { 
-          $or: [
-            { createdAt: { $gte: currentYear } },
-            { date: { $gte: currentYear } }
-          ],
-          status: { $ne: 'Cancelled' },
-          totalAmount: { $exists: true, $ne: null }
-        } 
-      },
-      { 
-        $group: { 
-          _id: null, 
-          total: { $sum: { $ifNull: ['$totalAmount', 0] } } 
-        } 
-      }
-    ]).maxTimeMS(15000);
-    const yearlyRevenue = yearlyRevenueResult[0]?.total || 0;
+    let yearlyRevenue = 0;
+    try {
+      const yearlyRevenueResult = await Slip.aggregate([
+        { 
+          $match: { 
+            $or: [
+              { createdAt: { $gte: currentYear } },
+              { date: { $gte: currentYear } }
+            ],
+            status: { $ne: 'Cancelled' },
+            totalAmount: { $exists: true, $ne: null }
+          } 
+        },
+        { 
+          $group: { 
+            _id: null, 
+            total: { $sum: { $ifNull: ['$totalAmount', 0] } } 
+          } 
+        }
+      ]).maxTimeMS(15000).allowDiskUse(true);
+      yearlyRevenue = yearlyRevenueResult[0]?.total || 0;
+    } catch (aggError) {
+      console.error('❌ Error calculating yearly revenue:', aggError);
+      yearlyRevenue = 0;
+    }
 
     // Pending orders/slips
     const pendingOrders = await Slip.countDocuments({ status: 'Pending' }).maxTimeMS(10000);
@@ -264,40 +313,48 @@ router.get('/sales-trends', async (req, res) => {
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - days);
 
-    const salesTrends = await Slip.aggregate([
-      {
-        $match: {
-          $or: [
-            { createdAt: { $gte: startDate, $exists: true } },
-            { date: { $gte: startDate, $exists: true } }
-          ],
-          status: { $ne: 'Cancelled' },
-          totalAmount: { $exists: true, $ne: null }
-        }
-      },
-      {
-        $addFields: {
-          dateField: { $ifNull: ['$createdAt', { $ifNull: ['$date', new Date()] }] }
-        }
-      },
-      {
-        $group: {
-          _id: {
-            date: { 
-              $dateToString: { 
-                format: groupFormat, 
-                date: '$dateField',
-                timezone: 'UTC'
-              } 
-            }
-          },
-          totalSales: { $sum: { $ifNull: ['$totalAmount', 0] } },
-          totalTransactions: { $sum: 1 },
-          averageSale: { $avg: { $ifNull: ['$totalAmount', 0] } }
-        }
-      },
-      { $sort: { '_id.date': 1 } }
-    ]).maxTimeMS(20000);
+    let salesTrends = [];
+    try {
+      salesTrends = await Slip.aggregate([
+        {
+          $match: {
+            $or: [
+              { createdAt: { $gte: startDate, $exists: true } },
+              { date: { $gte: startDate, $exists: true } }
+            ],
+            status: { $ne: 'Cancelled' },
+            totalAmount: { $exists: true, $ne: null }
+          }
+        },
+        {
+          $addFields: {
+            dateField: { $ifNull: ['$createdAt', { $ifNull: ['$date', new Date()] }] }
+          }
+        },
+        {
+          $group: {
+            _id: {
+              date: { 
+                $dateToString: { 
+                  format: groupFormat, 
+                  date: '$dateField',
+                  timezone: 'UTC'
+                } 
+              }
+            },
+            totalSales: { $sum: { $ifNull: ['$totalAmount', 0] } },
+            totalTransactions: { $sum: 1 },
+            averageSale: { $avg: { $ifNull: ['$totalAmount', 0] } }
+          }
+        },
+        { $sort: { '_id.date': 1 } }
+      ]).maxTimeMS(20000).allowDiskUse(true);
+    } catch (aggError) {
+      console.error('❌ Aggregation error in sales-trends:', aggError);
+      console.error('Aggregation error details:', aggError.message);
+      // Return empty array instead of failing
+      salesTrends = [];
+    }
 
     res.json({
       period,
@@ -344,28 +401,36 @@ router.get('/top-products', async (req, res) => {
       ];
     }
 
-    const topProducts = await Slip.aggregate([
-      { 
-        $match: matchStage
-      },
-      { $unwind: '$products' },
-      {
-        $match: {
-          'products.productName': { $exists: true, $ne: null, $ne: '' },
-          'products.quantity': { $exists: true, $type: 'number', $gt: 0 }
-        }
-      },
-      {
-        $group: {
-          _id: { $ifNull: ['$products.productName', 'Unknown Product'] },
-          totalQuantity: { $sum: { $ifNull: ['$products.quantity', 0] } },
-          totalRevenue: { $sum: { $ifNull: ['$products.totalPrice', 0] } },
-          transactionCount: { $sum: 1 }
-        }
-      },
-      { $sort: { totalQuantity: -1 } },
-      { $limit: parseInt(limit) || 10 }
-    ]).maxTimeMS(20000);
+    let topProducts = [];
+    try {
+      topProducts = await Slip.aggregate([
+        { 
+          $match: matchStage
+        },
+        { $unwind: '$products' },
+        {
+          $match: {
+            'products.productName': { $exists: true, $ne: null, $ne: '' },
+            'products.quantity': { $exists: true, $type: 'number', $gt: 0 }
+          }
+        },
+        {
+          $group: {
+            _id: { $ifNull: ['$products.productName', 'Unknown Product'] },
+            totalQuantity: { $sum: { $ifNull: ['$products.quantity', 0] } },
+            totalRevenue: { $sum: { $ifNull: ['$products.totalPrice', 0] } },
+            transactionCount: { $sum: 1 }
+          }
+        },
+        { $sort: { totalQuantity: -1 } },
+        { $limit: parseInt(limit) || 10 }
+      ]).maxTimeMS(20000).allowDiskUse(true);
+    } catch (aggError) {
+      console.error('❌ Aggregation error in top-products:', aggError);
+      console.error('Aggregation error details:', aggError.message);
+      // Return empty array instead of failing
+      topProducts = [];
+    }
 
     res.json({
       period,
@@ -479,32 +544,40 @@ router.get('/orders-by-status', async (req, res) => {
       });
     }
 
-    const ordersByStatus = await Slip.aggregate([
-      {
-        $match: {
-          status: { $exists: true }
-        }
-      },
-      {
-        $group: {
-          _id: { $ifNull: ['$status', 'Paid'] },
-          count: { $sum: 1 },
-          totalRevenue: { 
-            $sum: { 
-              $cond: [
-                { $and: [
-                  { $ne: ['$totalAmount', null] },
-                  { $ne: ['$status', 'Cancelled'] }
-                ]},
-                { $ifNull: ['$totalAmount', 0] },
-                0
-              ]
+    let ordersByStatus = [];
+    try {
+      ordersByStatus = await Slip.aggregate([
+        {
+          $match: {
+            status: { $exists: true }
+          }
+        },
+        {
+          $group: {
+            _id: { $ifNull: ['$status', 'Paid'] },
+            count: { $sum: 1 },
+            totalRevenue: { 
+              $sum: { 
+                $cond: [
+                  { $and: [
+                    { $ne: ['$totalAmount', null] },
+                    { $ne: ['$status', 'Cancelled'] }
+                  ]},
+                  { $ifNull: ['$totalAmount', 0] },
+                  0
+                ]
+              }
             }
           }
-        }
-      },
-      { $sort: { count: -1 } }
-    ]).maxTimeMS(15000);
+        },
+        { $sort: { count: -1 } }
+      ]).maxTimeMS(15000).allowDiskUse(true);
+    } catch (aggError) {
+      console.error('❌ Aggregation error in orders-by-status:', aggError);
+      console.error('Aggregation error details:', aggError.message);
+      // Return empty array instead of failing
+      ordersByStatus = [];
+    }
 
     res.json({
       ordersByStatus,

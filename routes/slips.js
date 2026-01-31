@@ -237,7 +237,7 @@ router.post('/', async (req, res) => {
       });
     }
 
-    const { customerName, customerPhone, paymentMethod, subtotal, totalAmount, discount = 0, products } = req.body;
+    const { customerName, customerPhone, paymentMethod, subtotal, totalAmount, discount = 0, partialPayment = 0, products } = req.body;
 
     if (!products || products.length === 0) {
       await session.abortTransaction();
@@ -437,9 +437,11 @@ router.post('/', async (req, res) => {
     // Calculate customer balance for Udhar payments
     let previousBalance = 0;
     let currentBalance = 0;
+    let remainingBalance = 0;
+    const partialPaymentAmount = parseFloat(partialPayment) || 0;
     
     if (paymentMethod === 'Udhar' && customerName && customerName.trim() !== 'Walk Customer') {
-      // Calculate previous balance from all unpaid Udhar slips
+      // Calculate previous balance from all unpaid Udhar slips (totalAmount - discount - partialPayment)
       const previousSlips = await Slip.find({
         customerName: customerName.trim(),
         paymentMethod: 'Udhar',
@@ -447,12 +449,21 @@ router.post('/', async (req, res) => {
       }).session(session);
       
       previousBalance = previousSlips.reduce((sum, slip) => {
-        return sum + (slip.totalAmount || 0) - (slip.discount || 0);
+        const slipTotal = (slip.totalAmount || 0) - (slip.discount || 0);
+        const partialPaid = slip.partialPayment || 0;
+        return sum + (slipTotal - partialPaid);
       }, 0);
       
-      // Current balance = previous balance + current slip amount (after discount)
+      // Current bill amount (after discount)
       const discountAmount = parseFloat(discount) || 0;
-      currentBalance = previousBalance + (validTotalAmount - discountAmount);
+      const currentBillAmount = validTotalAmount - discountAmount;
+      
+      // Remaining balance for this bill (after partial payment)
+      const currentRemaining = Math.max(0, currentBillAmount - partialPaymentAmount);
+      
+      // Total remaining balance = previous balance + current remaining
+      remainingBalance = previousBalance + currentRemaining;
+      currentBalance = previousBalance + currentBillAmount;
     }
 
     // create slip
@@ -466,6 +477,8 @@ router.post('/', async (req, res) => {
       totalAmount: validTotalAmount,
       previousBalance: previousBalance,
       currentBalance: currentBalance,
+      partialPayment: paymentMethod === 'Udhar' ? partialPaymentAmount : 0,
+      remainingBalance: paymentMethod === 'Udhar' ? remainingBalance : 0,
       status: 'Paid'
     });
 

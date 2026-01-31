@@ -70,6 +70,19 @@ const SlipSchema = new mongoose.Schema({
     // Note: Can be negative for credit tracking (customer owes money)
   },
 
+  // Partial payment for Udhar/Credit payments
+  partialPayment: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
+
+  remainingBalance: {
+    type: Number,
+    default: 0
+    // Remaining balance after partial payment
+  },
+
   products: [ProductSchema],
 
   subtotal: { type: Number, required: true, min: 0 },
