@@ -82,7 +82,7 @@ router.get('/', async (req, res) => {
       });
     }
 
-    const { page = 1, limit = 20, startDate, endDate, status = '' } = req.query;
+    const { page = 1, limit = 20, startDate, endDate, status = '', customerName = '', paymentMethod = '' } = req.query;
 
     const filter = {};
 
@@ -94,6 +94,17 @@ router.get('/', async (req, res) => {
 
     if (status) {
       filter.status = status;
+    }
+
+    // Customer name filter - EXACT match (case-insensitive but exact string match)
+    if (customerName && customerName.trim()) {
+      // Use exact match with case-insensitive comparison
+      filter.customerName = { $regex: `^${customerName.trim()}$`, $options: 'i' };
+    }
+
+    // Payment method filter
+    if (paymentMethod && paymentMethod.trim()) {
+      filter.paymentMethod = paymentMethod.trim();
     }
 
     // Use lean() for better performance and add timeout
