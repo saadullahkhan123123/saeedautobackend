@@ -67,8 +67,8 @@ const ensureConnection = async () => {
   
   return false;
 };
-<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>
-read_file
+
+
 
 // GET all slips
 router.get('/', async (req, res) => {
