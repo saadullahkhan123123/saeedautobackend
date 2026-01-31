@@ -6,8 +6,7 @@ const Slip = require('../models/slips');
 const Income = require('../models/income');
 
 // Helper function to ensure MongoDB connection
-// Note: We don't try to reconnect here - the main app handles that
-// We just check if connection is ready and wait if it's connecting
+// This function actively tries to reconnect if disconnected
 const ensureConnection = async () => {
   // If already connected, return true immediately
   if (mongoose.connection.readyState === 1) {
@@ -35,12 +34,35 @@ const ensureConnection = async () => {
     }
   }
   
-  // If disconnected (readyState 0 or 3), don't try to reconnect
-  // The main app's connection handler will handle reconnection
-  // Just return false and let the route return fallback data
+  // If disconnected (readyState 0 or 3), try to reconnect
   if (mongoose.connection.readyState === 0 || mongoose.connection.readyState === 3) {
-    console.warn(`⚠️ MongoDB connection state: ${mongoose.connection.readyState} (0=disconnected, 3=uninitialized)`);
-    return false;
+    try {
+      // Only try to reconnect if MONGO_URI is available
+      if (process.env.MONGO_URI) {
+        // Try to reconnect with a shorter timeout for serverless environments
+        const connectionOptions = {
+          serverSelectionTimeoutMS: 10000,
+          socketTimeoutMS: 30000,
+          connectTimeoutMS: 10000,
+          maxPoolSize: 5,
+          retryWrites: true,
+          w: 'majority'
+        };
+        
+        await mongoose.connect(process.env.MONGO_URI, connectionOptions);
+        
+        // Wait a bit to ensure connection is established
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
+        if (mongoose.connection.readyState === 1) {
+          return true;
+        }
+      }
+    } catch (err) {
+      // Connection attempt failed, return false
+      console.error('⚠️ Reconnection attempt failed:', err.message);
+      return false;
+    }
   }
   
   return false;

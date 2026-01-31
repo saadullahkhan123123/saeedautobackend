@@ -6,20 +6,69 @@ const Item = require('../models/items');
 const Income = require('../models/income');
 
 // Helper function to ensure MongoDB connection
+// This function actively tries to reconnect if disconnected
 const ensureConnection = async () => {
+  // If already connected, return true immediately
   if (mongoose.connection.readyState === 1) {
-    return true; // Already connected
+    return true;
   }
   
-  // If disconnected, don't try to reconnect - main app handles that
-  // Just return false and let the route return appropriate error
+  // If connecting, wait for it to complete (up to 20 seconds)
+  if (mongoose.connection.readyState === 2) {
+    const maxWait = 20000;
+    const startTime = Date.now();
+    const checkInterval = 200; // Check every 200ms
+    
+    while (mongoose.connection.readyState === 2 && (Date.now() - startTime) < maxWait) {
+      await new Promise(resolve => setTimeout(resolve, checkInterval));
+      
+      // Check if connection succeeded
+      if (mongoose.connection.readyState === 1) {
+        return true;
+      }
+    }
+    
+    // If we're still connecting after maxWait, check one more time
+    if (mongoose.connection.readyState === 1) {
+      return true;
+    }
+  }
+  
+  // If disconnected (readyState 0 or 3), try to reconnect
   if (mongoose.connection.readyState === 0 || mongoose.connection.readyState === 3) {
-    console.warn(`⚠️ MongoDB connection state: ${mongoose.connection.readyState} (0=disconnected, 3=uninitialized)`);
-    return false;
+    try {
+      // Only try to reconnect if MONGO_URI is available
+      if (process.env.MONGO_URI) {
+        // Try to reconnect with a shorter timeout for serverless environments
+        const connectionOptions = {
+          serverSelectionTimeoutMS: 10000,
+          socketTimeoutMS: 30000,
+          connectTimeoutMS: 10000,
+          maxPoolSize: 5,
+          retryWrites: true,
+          w: 'majority'
+        };
+        
+        await mongoose.connect(process.env.MONGO_URI, connectionOptions);
+        
+        // Wait a bit to ensure connection is established
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
+        if (mongoose.connection.readyState === 1) {
+          return true;
+        }
+      }
+    } catch (err) {
+      // Connection attempt failed, return false
+      console.error('⚠️ Reconnection attempt failed:', err.message);
+      return false;
+    }
   }
   
-  return false; // Connecting or disconnecting
+  return false;
 };
+<｜tool▁calls▁begin｜><｜tool▁call▁begin｜>
+read_file
 
 // GET all slips
 router.get('/', async (req, res) => {
