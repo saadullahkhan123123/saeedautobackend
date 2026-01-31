@@ -11,22 +11,11 @@ const ensureConnection = async () => {
     return true; // Already connected
   }
   
-  if (mongoose.connection.readyState === 0) {
-    // Not connected, try to connect
-    try {
-      await mongoose.connect(process.env.MONGO_URI, {
-        serverSelectionTimeoutMS: 10000,
-        socketTimeoutMS: 45000,
-        connectTimeoutMS: 10000,
-        bufferMaxEntries: 0,
-        bufferCommands: false,
-      });
-      console.log('✅ MongoDB connected in route handler');
-      return true;
-    } catch (err) {
-      console.error('❌ Failed to connect to MongoDB:', err.message);
-      return false;
-    }
+  // If disconnected, don't try to reconnect - main app handles that
+  // Just return false and let the route return appropriate error
+  if (mongoose.connection.readyState === 0 || mongoose.connection.readyState === 3) {
+    console.warn(`⚠️ MongoDB connection state: ${mongoose.connection.readyState} (0=disconnected, 3=uninitialized)`);
+    return false;
   }
   
   return false; // Connecting or disconnecting

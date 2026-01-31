@@ -40,11 +40,10 @@ const connectDB = async () => {
       serverSelectionTimeoutMS: 20000, // Increased timeout
       socketTimeoutMS: 45000,
       connectTimeoutMS: 20000, // Increased timeout
-      bufferCommands: true,
-      bufferMaxEntries: 0,
       maxPoolSize: 10,
       retryWrites: true,
       w: 'majority'
+      // Note: bufferCommands and bufferMaxEntries are Mongoose schema options, not connection options
     };
 
     await mongoose.connect(process.env.MONGO_URI, connectionOptions);
