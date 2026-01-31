@@ -14,33 +14,76 @@ const ensureConnection = async () => {
   
   // If connecting, wait for it to complete
   if (mongoose.connection.readyState === 2) {
-    // Wait up to 10 seconds for connection to complete
-    const maxWait = 10000;
+    // Wait up to 15 seconds for connection to complete
+    const maxWait = 15000;
     const startTime = Date.now();
     while (mongoose.connection.readyState === 2 && (Date.now() - startTime) < maxWait) {
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise(resolve => setTimeout(resolve, 200));
     }
     if (mongoose.connection.readyState === 1) {
       return true;
     }
   }
   
-  // If disconnected, try to connect
+  // If disconnected, try to connect with retry logic
   if (mongoose.connection.readyState === 0 || mongoose.connection.readyState === 3) {
-    try {
-      await mongoose.connect(process.env.MONGO_URI, {
-        serverSelectionTimeoutMS: 10000,
-        socketTimeoutMS: 45000,
-        connectTimeoutMS: 10000,
-        bufferCommands: true, // Enable buffering to prevent errors
-        bufferMaxEntries: 0, // Unlimited buffer
-      });
-      // Wait a bit to ensure connection is fully established
-      await new Promise(resolve => setTimeout(resolve, 100));
-      return mongoose.connection.readyState === 1;
-    } catch (err) {
-      console.error('❌ Failed to connect to MongoDB:', err.message);
-      return false;
+    const maxRetries = 3;
+    let retryCount = 0;
+    
+    while (retryCount < maxRetries) {
+      try {
+        // Check if already connected before attempting
+        if (mongoose.connection.readyState === 1) {
+          return true;
+        }
+        
+        // Only connect if not already connected or connecting
+        if (mongoose.connection.readyState === 0 || mongoose.connection.readyState === 3) {
+          // Check if MONGO_URI is available
+          if (!process.env.MONGO_URI) {
+            console.error('❌ MONGO_URI environment variable is not set');
+            return false;
+          }
+          
+          await mongoose.connect(process.env.MONGO_URI, {
+            serverSelectionTimeoutMS: 15000,
+            socketTimeoutMS: 45000,
+            connectTimeoutMS: 15000,
+            bufferCommands: true,
+            bufferMaxEntries: 0,
+            maxPoolSize: 10,
+            retryWrites: true,
+            w: 'majority'
+          });
+        } else if (mongoose.connection.readyState === 1) {
+          // Already connected
+          return true;
+        }
+        
+        // Wait a bit longer to ensure connection is fully established
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
+        // Verify connection is actually established
+        if (mongoose.connection.readyState === 1) {
+          console.log('✅ MongoDB connection established in analytics route');
+          return true;
+        }
+        
+        // If still not connected, wait and retry
+        retryCount++;
+        if (retryCount < maxRetries) {
+          await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+        }
+      } catch (err) {
+        console.error(`❌ Failed to connect to MongoDB (attempt ${retryCount + 1}/${maxRetries}):`, err.message);
+        retryCount++;
+        if (retryCount < maxRetries) {
+          await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+        } else {
+          console.error('❌ All connection attempts failed');
+          return false;
+        }
+      }
     }
   }
   
@@ -51,9 +94,28 @@ router.get('/dashboard', async (req, res) => {
   try {
     const isConnected = await ensureConnection();
     if (!isConnected) {
+      console.warn('⚠️ Database connection not available, returning fallback data');
       return res.status(503).json({ 
         error: 'Database connection unavailable', 
-        details: 'Please try again in a moment' 
+        details: 'Please try again in a moment',
+        summary: {
+          totalItems: 0,
+          totalSlips: 0,
+          totalIncomeRecords: 0,
+          totalRevenue: 0,
+          todaySlips: 0,
+          todayRevenue: 0,
+          monthlyRevenue: 0,
+          yearlyRevenue: 0,
+          lowStockItems: 0,
+          outOfStockItems: 0,
+          totalCustomers: 0,
+          pendingOrders: 0,
+          profit: 0
+        },
+        recentSales: [],
+        paymentMethods: [],
+        message: 'Dashboard data unavailable - database connection issue'
       });
     }
 
@@ -287,9 +349,13 @@ router.get('/sales-trends', async (req, res) => {
   try {
     const isConnected = await ensureConnection();
     if (!isConnected) {
+      const { period = 'week' } = req.query;
       return res.status(503).json({ 
         error: 'Database connection unavailable', 
-        details: 'Please try again in a moment' 
+        details: 'Please try again in a moment',
+        period,
+        salesTrends: [],
+        message: 'Sales trends unavailable - database connection issue'
       });
     }
 
@@ -378,9 +444,13 @@ router.get('/top-products', async (req, res) => {
   try {
     const isConnected = await ensureConnection();
     if (!isConnected) {
+      const { limit = 10, period = 'all' } = req.query;
       return res.status(503).json({ 
         error: 'Database connection unavailable', 
-        details: 'Please try again in a moment' 
+        details: 'Please try again in a moment',
+        period,
+        topProducts: [],
+        message: 'Top products unavailable - database connection issue'
       });
     }
 
@@ -540,7 +610,8 @@ router.get('/orders-by-status', async (req, res) => {
       return res.status(503).json({ 
         error: 'Database connection unavailable', 
         details: 'Please try again in a moment',
-        ordersByStatus: []
+        ordersByStatus: [],
+        message: 'Orders by status unavailable - database connection issue'
       });
     }
 
