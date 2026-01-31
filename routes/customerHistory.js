@@ -1,7 +1,71 @@
 const express = require('express');
 const router = express.Router();
+const mongoose = require('mongoose');
 const Slip = require('../models/slips');
 const Income = require('../models/income');
+
+// Helper function to ensure MongoDB connection
+// This function actively tries to reconnect if disconnected
+const ensureConnection = async () => {
+  // If already connected, return true immediately
+  if (mongoose.connection.readyState === 1) {
+    return true;
+  }
+  
+  // If connecting, wait for it to complete (up to 20 seconds)
+  if (mongoose.connection.readyState === 2) {
+    const maxWait = 20000;
+    const startTime = Date.now();
+    const checkInterval = 200; // Check every 200ms
+    
+    while (mongoose.connection.readyState === 2 && (Date.now() - startTime) < maxWait) {
+      await new Promise(resolve => setTimeout(resolve, checkInterval));
+      
+      // Check if connection succeeded
+      if (mongoose.connection.readyState === 1) {
+        return true;
+      }
+    }
+    
+    // If we're still connecting after maxWait, check one more time
+    if (mongoose.connection.readyState === 1) {
+      return true;
+    }
+  }
+  
+  // If disconnected (readyState 0 or 3), try to reconnect
+  if (mongoose.connection.readyState === 0 || mongoose.connection.readyState === 3) {
+    try {
+      // Only try to reconnect if MONGO_URI is available
+      if (process.env.MONGO_URI) {
+        // Try to reconnect with a shorter timeout for serverless environments
+        const connectionOptions = {
+          serverSelectionTimeoutMS: 10000,
+          socketTimeoutMS: 30000,
+          connectTimeoutMS: 10000,
+          maxPoolSize: 5,
+          retryWrites: true,
+          w: 'majority'
+        };
+        
+        await mongoose.connect(process.env.MONGO_URI, connectionOptions);
+        
+        // Wait a bit to ensure connection is established
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
+        if (mongoose.connection.readyState === 1) {
+          return true;
+        }
+      }
+    } catch (err) {
+      // Connection attempt failed, return false
+      console.error('⚠️ Reconnection attempt failed:', err.message);
+      return false;
+    }
+  }
+  
+  return false;
+};
 
 // Test route to verify the router is working
 router.get('/test', (req, res) => {
@@ -11,6 +75,16 @@ router.get('/test', (req, res) => {
 // GET /api/customer-history/search/suggestions - Get customer suggestions by name, phone, or ID
 router.get('/search/suggestions', async (req, res) => {
   try {
+    // Ensure MongoDB connection before query
+    const isConnected = await ensureConnection();
+    if (!isConnected) {
+      return res.status(503).json({ 
+        error: 'Database connection unavailable', 
+        details: 'Please try again in a moment',
+        suggestions: []
+      });
+    }
+
     const { query = '', type = 'name' } = req.query; // type: 'name', 'phone', 'id', 'all'
     
     if (query.length < 2) {
@@ -77,6 +151,15 @@ router.get('/search/suggestions', async (req, res) => {
 // Supports search by name, phone, or slip ID
 router.get('/:customerName', async (req, res) => {
   try {
+    // Ensure MongoDB connection before query
+    const isConnected = await ensureConnection();
+    if (!isConnected) {
+      return res.status(503).json({ 
+        error: 'Database connection unavailable', 
+        details: 'Please try again in a moment'
+      });
+    }
+
     // Skip if this is the suggestions route
     if (req.params.customerName === 'search') {
       return res.status(404).json({ error: 'Route not found' });
