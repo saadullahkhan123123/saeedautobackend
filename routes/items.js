@@ -136,6 +136,31 @@ router.get('/', async (req, res) => {
   }
 });
 
+// DELETE /api/items/all - Permanently delete ALL products from database
+router.delete('/all', async (req, res) => {
+  try {
+    const isConnected = await ensureConnection();
+    if (!isConnected) {
+      return res.status(503).json({
+        error: 'Database connection unavailable',
+        details: 'Please try again in a moment'
+      });
+    }
+    const result = await Item.deleteMany({});
+    console.log(`✅ Deleted all items: ${result.deletedCount} product(s).`);
+    res.json({
+      message: 'All products permanently deleted',
+      deleted: { items: result.deletedCount }
+    });
+  } catch (err) {
+    console.error('❌ Error deleting all items:', err);
+    res.status(500).json({
+      error: 'Failed to delete all products',
+      details: err.message
+    });
+  }
+});
+
 // GET /api/items/low-stock - Get low stock items
 router.get('/low-stock', async (req, res) => {
   try {

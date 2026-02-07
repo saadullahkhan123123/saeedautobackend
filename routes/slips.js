@@ -145,6 +145,49 @@ router.get('/', async (req, res) => {
   }
 });
 
+// DELETE /api/slips/all - Permanently delete ALL slips from database (and mark related income inactive)
+router.delete('/all', async (req, res) => {
+  try {
+    const isConnected = await ensureConnection();
+    if (!isConnected) {
+      return res.status(503).json({
+        error: 'Database connection unavailable',
+        details: 'Please try again in a moment'
+      });
+    }
+
+    // Mark all income records that reference a slip as inactive
+    const incomeUpdateResult = await Income.updateMany(
+      { slipId: { $exists: true, $ne: null } },
+      {
+        $set: {
+          isActive: false,
+          notes: `All slips deleted on ${new Date().toISOString()}`
+        }
+      }
+    );
+
+    // Permanently delete all slips
+    const slipRes = await Slip.deleteMany({});
+
+    console.log(`✅ Deleted all slips: ${slipRes.deletedCount} slip(s), marked ${incomeUpdateResult.modifiedCount} income record(s) inactive.`);
+
+    res.json({
+      message: 'All slips permanently deleted',
+      deleted: {
+        slips: slipRes.deletedCount,
+        incomeMarkedInactive: incomeUpdateResult.modifiedCount
+      }
+    });
+  } catch (err) {
+    console.error('❌ Error deleting all slips:', err);
+    res.status(500).json({
+      error: 'Failed to delete all slips',
+      details: err.message
+    });
+  }
+});
+
 // PATCH /api/slips/cancel/:id - Dedicated cancel endpoint (using /cancel/:id to avoid route conflicts)
 router.patch('/cancel/:id', async (req, res) => {
   const session = await Slip.startSession();

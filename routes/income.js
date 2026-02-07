@@ -97,6 +97,24 @@ router.get('/', async (req, res) => {
   }
 });
 
+// DELETE /api/income/all - Permanently delete ALL income records from database
+router.delete('/all', async (req, res) => {
+  try {
+    const result = await Income.deleteMany({});
+    console.log(`✅ Deleted all income: ${result.deletedCount} record(s).`);
+    res.json({
+      message: 'All income permanently deleted',
+      deleted: { income: result.deletedCount }
+    });
+  } catch (err) {
+    console.error('❌ Error deleting all income:', err);
+    res.status(500).json({
+      error: 'Failed to delete all income',
+      details: err.message
+    });
+  }
+});
+
 // GET /api/income/summary/overview - Get income summary
 router.get('/summary/overview', async (req, res) => {
   try {

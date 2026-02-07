@@ -166,6 +166,7 @@ app.use('/api/slips', require('./routes/slips'));
 app.use('/api/analytics', require('./routes/analytics'));
 app.use('/api/history', require('./routes/history'));
 app.use('/api/customer-history', require('./routes/customerHistory'));
+app.use('/api/reset', require('./routes/reset'));
 
 /* -----------------------------------------
    ✅ 404 Handler (MUST BE LAST)
