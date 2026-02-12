@@ -295,19 +295,25 @@ router.post('/', async (req, res) => {
       minStockLevel,
       maxStockLevel,
       supplier,
-      costPrice
+      costPrice,
+      isActive
     } = req.body;
 
+    // Simple/custom product: when name is provided, skip productType-specific validations
+    const isSimpleProduct = !!(name && typeof name === 'string' && name.trim());
+
     // Validation
-    // Name and SKU are OPTIONAL - auto-generate if not provided
-    // Explicitly allow empty/undefined/null values for name and SKU
-    const generatedName = (name && name.trim()) 
-      ? name.trim() 
-      : `${productType}${coverType ? ` - ${coverType}` : ''}${plateType ? ` - ${plateType}` : ''}${formVariant ? ` - ${formVariant}` : ''}`.trim();
+    // Name and SKU are OPTIONAL - auto-generate if not provided (unless simple product)
+    const generatedName = isSimpleProduct
+      ? name.trim()
+      : ((name && name.trim()) 
+          ? name.trim() 
+          : `${productType || 'Cover'}${coverType ? ` - ${coverType}` : ''}${plateType ? ` - ${plateType}` : ''}${formVariant ? ` - ${formVariant}` : ''}`.trim());
     
+    const productTypeForSku = productType || 'Cover';
     const generatedSku = (sku && sku.trim()) 
       ? sku.trim().toUpperCase() 
-      : `${productType}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`.toUpperCase();
+      : `${productTypeForSku}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`.toUpperCase();
     
     console.log('📝 Name and SKU generation:', { 
       providedName: name, 
@@ -364,59 +370,52 @@ router.post('/', async (req, res) => {
           isActive: true 
         });
         if (!existingItem) break;
-        finalSku = `${productType}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`.toUpperCase();
+        finalSku = `${productTypeForSku}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`.toUpperCase();
         attempts++;
       }
     }
 
-    // Validation: If productType is Cover, coverType is required
-    if (productType === 'Cover' && !coverType) {
-      return res.status(400).json({ error: 'Cover Type is required when Product Type is Cover' });
-    }
-
-    // Validation: If productType is Plate, validate required fields
-    if (productType === 'Plate') {
-      if (bikeName === 'Plastic Plate') {
-        // Plastic Plate is standalone, no company/bike/type needed
-      } else {
-        if (!bikeName) {
-          return res.status(400).json({ error: 'Bike Name is required for Plate products (except Plastic Plate)' });
-        }
-        if (!plateType) {
-          return res.status(400).json({ error: 'Plate Type is required for Plate products (except Plastic Plate)' });
-        }
-        // Validate plate combinations (company required for some bikes)
-        if (bikeName === '70' && !plateCompany) {
-          console.error('❌ Plate validation failed: Company is required for Bike 70');
-          return res.status(400).json({ error: 'Company is required for Bike 70' });
+    // Validation: productType-specific only when NOT a simple/custom product (no custom name)
+    if (!isSimpleProduct) {
+      if (productType === 'Cover' && !coverType) {
+        return res.status(400).json({ error: 'Cover Type is required when Product Type is Cover' });
+      }
+      if (productType === 'Plate') {
+        if (bikeName === 'Plastic Plate') {
+          // Plastic Plate is standalone
+        } else {
+          if (!bikeName) {
+            return res.status(400).json({ error: 'Bike Name is required for Plate products (except Plastic Plate)' });
+          }
+          if (!plateType) {
+            return res.status(400).json({ error: 'Plate Type is required for Plate products (except Plastic Plate)' });
+          }
+          if (bikeName === '70' && !plateCompany) {
+            return res.status(400).json({ error: 'Company is required for Bike 70' });
+          }
         }
       }
-    }
-
-    // Validation: If productType is Form, validate required fields
-    if (productType === 'Form') {
-      if (!formCompany) {
-        console.error('❌ Form validation failed: formCompany is required');
-        return res.status(400).json({ error: 'Company is required for Form products' });
-      }
-      if (!formType) {
-        console.error('❌ Form validation failed: formType is required');
-        return res.status(400).json({ error: 'Form Type is required for Form products' });
-      }
-      if (!formVariant) {
-        console.error('❌ Form validation failed: formVariant is required');
-        return res.status(400).json({ error: 'Form Variant is required for Form products' });
+      if (productType === 'Form') {
+        if (!formCompany) {
+          return res.status(400).json({ error: 'Company is required for Form products' });
+        }
+        if (!formType) {
+          return res.status(400).json({ error: 'Form Type is required for Form products' });
+        }
+        if (!formVariant) {
+          return res.status(400).json({ error: 'Form Variant is required for Form products' });
+        }
       }
     }
 
     console.log('✅ All validations passed, creating item...');
 
-    // Build item object - only include fields relevant to productType
+    // Build item object - only include fields relevant to productType (or minimal for simple product)
     const itemData = {
       name: generatedName || (name ? name.trim() : ''),
       sku: finalSku,
-      productType: productType || 'Cover',
-      category: category || '',
+      productType: isSimpleProduct ? 'Cover' : (productType || 'Cover'),
+      category: category || 'General',
       subcategory: subcategory || '',
       quantity: quantityValue,
       price: priceValue,
@@ -425,21 +424,23 @@ router.post('/', async (req, res) => {
       description: description || '',
       minStockLevel: minStockLevel || 10,
       maxStockLevel: maxStockLevel || 1000,
-      supplier: supplier || ''
+      supplier: supplier || '',
+      isActive: isActive !== undefined && isActive !== null ? !!isActive : true
     };
 
-    // Only add productType-specific fields
-    if (productType === 'Cover') {
-      itemData.coverType = coverType || '';
-    } else if (productType === 'Plate') {
-      itemData.plateCompany = plateCompany || '';
-      itemData.bikeName = bikeName || '';
-      itemData.plateType = plateType || '';
-    } else if (productType === 'Form') {
-      itemData.formCompany = formCompany || '';
-      itemData.formType = formType || '';
-      itemData.formVariant = formVariant || '';
-      itemData.bikeName = formBikeName || '';
+    if (!isSimpleProduct) {
+      if (productType === 'Cover') {
+        itemData.coverType = coverType || '';
+      } else if (productType === 'Plate') {
+        itemData.plateCompany = plateCompany || '';
+        itemData.bikeName = bikeName || '';
+        itemData.plateType = plateType || '';
+      } else if (productType === 'Form') {
+        itemData.formCompany = formCompany || '';
+        itemData.formType = formType || '';
+        itemData.formVariant = formVariant || '';
+        itemData.bikeName = formBikeName || '';
+      }
     }
 
     const newItem = new Item(itemData);
