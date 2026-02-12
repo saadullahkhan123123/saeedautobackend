@@ -68,6 +68,17 @@ const ensureConnection = async () => {
   return false;
 };
 
+const fallbackDashboard = {
+  summary: {
+    totalItems: 0, totalSlips: 0, totalIncomeRecords: 0, totalRevenue: 0,
+    todaySlips: 0, todayRevenue: 0, monthlyRevenue: 0, yearlyRevenue: 0,
+    lowStockItems: 0, outOfStockItems: 0, totalCustomers: 0, pendingOrders: 0, profit: 0
+  },
+  recentSales: [],
+  paymentMethods: [],
+  message: 'Dashboard data unavailable'
+};
+
 router.get('/dashboard', async (req, res) => {
   try {
     const isConnected = await ensureConnection();
@@ -407,13 +418,7 @@ router.get('/sales-trends', async (req, res) => {
     });
   } catch (error) {
     console.error('❌ Error fetching sales trends:', error);
-    console.error('Error stack:', error.stack);
-    res.status(500).json({ 
-      error: 'Failed to fetch sales trends', 
-      details: error.message,
-      period,
-      salesTrends: []
-    });
+    return res.status(200).json({ period: req.query.period || 'week', salesTrends: [], error: error.message });
   }
 });
 
@@ -487,13 +492,7 @@ router.get('/top-products', async (req, res) => {
     });
   } catch (error) {
     console.error('❌ Error fetching top products:', error);
-    console.error('Error stack:', error.stack);
-    res.status(500).json({ 
-      error: 'Failed to fetch top products', 
-      details: error.message,
-      period,
-      topProducts: []
-    });
+    return res.status(200).json({ period: req.query.period || 'all', topProducts: [], error: error.message });
   }
 });
 
@@ -634,12 +633,7 @@ router.get('/orders-by-status', async (req, res) => {
     });
   } catch (error) {
     console.error('❌ Error fetching orders by status:', error);
-    console.error('Error stack:', error.stack);
-    res.status(500).json({ 
-      error: 'Failed to fetch orders by status', 
-      details: error.message,
-      ordersByStatus: []
-    });
+    return res.status(200).json({ ordersByStatus: [], error: error.message });
   }
 });
 
