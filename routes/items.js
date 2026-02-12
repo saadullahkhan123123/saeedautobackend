@@ -296,9 +296,7 @@ router.post('/', async (req, res) => {
       maxStockLevel,
       supplier,
       costPrice,
-      isActive,
-      company,
-      bikeName
+      isActive
     } = req.body;
 
     // Simple/custom product: when name is provided, skip productType-specific validations
