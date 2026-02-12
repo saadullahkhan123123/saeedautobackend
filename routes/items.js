@@ -296,7 +296,9 @@ router.post('/', async (req, res) => {
       maxStockLevel,
       supplier,
       costPrice,
-      isActive
+      isActive,
+      company,
+      bikeName
     } = req.body;
 
     // Simple/custom product: when name is provided, skip productType-specific validations
@@ -428,6 +430,10 @@ router.post('/', async (req, res) => {
       isActive: isActive !== undefined && isActive !== null ? !!isActive : true
     };
 
+    if (isSimpleProduct) {
+      itemData.company = (company && typeof company === 'string') ? company.trim() : '';
+      itemData.bikeName = (bikeName && typeof bikeName === 'string') ? bikeName.trim() : '';
+    }
     if (!isSimpleProduct) {
       if (productType === 'Cover') {
         itemData.coverType = coverType || '';
