@@ -78,35 +78,15 @@ const connectDB = async () => {
   }
 };
 
-// Connect only when MONGO_URI is set (so / and /api/test always respond)
-connectDB();
-
-// Handle MongoDB connection events
-mongoose.connection.on('error', (err) => {
-  console.error('❌ MongoDB connection error:', err);
-});
-
-mongoose.connection.on('disconnected', () => {
-  console.warn('⚠️ MongoDB disconnected - attempting reconnect...');
-  // Auto-reconnect
-  setTimeout(() => {
-    if (mongoose.connection.readyState === 0) {
-      connectDB();
-    }
-  }, 5000);
-});
-
-mongoose.connection.on('reconnected', () => {
-  console.log('✅ MongoDB reconnected');
-});
-
-mongoose.connection.on('connecting', () => {
-  console.log('🔄 Connecting to MongoDB...');
-});
-
-mongoose.connection.on('connected', () => {
-  console.log('✅ MongoDB connected successfully');
-});
+// Do NOT connect DB at cold start – routes use ensureConnection() on first use.
+// This avoids timeouts/crashes during Vercel serverless cold start.
+if (process.env.MONGO_URI) {
+  mongoose.connection.on('error', (err) => console.error('❌ MongoDB connection error:', err));
+  mongoose.connection.on('disconnected', () => {
+    console.warn('⚠️ MongoDB disconnected');
+    setTimeout(() => { if (mongoose.connection.readyState === 0) connectDB(); }, 5000);
+  });
+}
 
 /* -----------------------------------------
    ✅ Root route
@@ -146,15 +126,25 @@ app.get('/api/test', (req, res) => {
 });
 
 /* -----------------------------------------
-   ✅ Import routes
+   ✅ Import routes (wrap so one failing require doesn't crash the whole function)
 ------------------------------------------- */
-app.use('/api/items', require('../routes/items'));
-app.use('/api/income', require('../routes/income'));
-app.use('/api/slips', require('../routes/slips'));
-app.use('/api/analytics', require('../routes/analytics'));
-app.use('/api/history', require('../routes/history'));
-app.use('/api/customer-history', require('../routes/customerHistory'));
-app.use('/api/reset', require('../routes/reset'));
+const routeLoadError = [];
+function useRoute(path, loader) {
+  try {
+    app.use(path, loader());
+  } catch (e) {
+    console.error('Route load failed:', path, e.message || e);
+    routeLoadError.push({ path, error: (e.message || String(e)) });
+    app.use(path, (req, res) => res.status(503).json({ error: 'Route unavailable', path, loadError: e.message }));
+  }
+}
+useRoute('/api/items', () => require('../routes/items'));
+useRoute('/api/income', () => require('../routes/income'));
+useRoute('/api/slips', () => require('../routes/slips'));
+useRoute('/api/analytics', () => require('../routes/analytics'));
+useRoute('/api/history', () => require('../routes/history'));
+useRoute('/api/customer-history', () => require('../routes/customerHistory'));
+useRoute('/api/reset', () => require('../routes/reset'));
 
 /* -----------------------------------------
    ✅ 404 Handler (with CORS so browser sees headers)
@@ -188,7 +178,16 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: err.message || 'Internal server error' });
 });
 
-// Export the Express app for Vercel
-// Vercel automatically handles Express apps
-module.exports = app;
+// Export for Vercel: wrap so uncaught errors return 500 instead of crashing the function
+const handler = (req, res) => {
+  try {
+    app(req, res);
+  } catch (err) {
+    console.error('Uncaught error in handler:', err);
+    res.statusCode = 500;
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ error: 'Internal server error', message: err.message }));
+  }
+};
+module.exports = handler;
 

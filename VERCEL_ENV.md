@@ -2,7 +2,13 @@
 
 Backend project: **saeedautobackend** (or your Vercel backend project name).
 
-## Where to set
+## Root Directory (important)
+
+In **Settings → General**, set **Root Directory** to the folder that contains `api/`, `routes/`, and `models/`.  
+If your repo has an `express js` folder with those inside it, set Root Directory to **`express js`**.  
+Otherwise the serverless function will crash (cannot find `../routes/...`).
+
+## Where to set env vars
 
 1. Open [Vercel Dashboard](https://vercel.com/dashboard)
 2. Select your **backend** project (e.g. saeedautobackend)
