@@ -50,37 +50,35 @@ app.use(express.urlencoded({ extended: true }));
 
 /* -----------------------------------------
    ✅ Connect MongoDB Atlas with optimized settings for Vercel
+   Only connect if MONGO_URI is set in Vercel Environment Variables.
 ------------------------------------------- */
 const connectDB = async () => {
+  if (!process.env.MONGO_URI) {
+    console.warn('⚠️ MONGO_URI not set in Vercel – add it in Project Settings → Environment Variables. API will respond but DB routes will fail.');
+    return;
+  }
   try {
-    // Check if already connected
     if (mongoose.connection.readyState === 1) {
       console.log('✅ MongoDB already connected');
       return;
     }
-
     const connectionOptions = {
-      serverSelectionTimeoutMS: 10000, // 10 seconds to select server
-      socketTimeoutMS: 45000, // 45 seconds socket timeout
-      connectTimeoutMS: 10000, // 10 seconds to establish connection
-      maxPoolSize: 10, // Maximum number of connections in the pool
-      minPoolSize: 1, // Minimum number of connections
-      bufferMaxEntries: 0, // Disable mongoose buffering
-      bufferCommands: false, // Disable mongoose buffering
+      serverSelectionTimeoutMS: 10000,
+      socketTimeoutMS: 45000,
+      connectTimeoutMS: 10000,
+      maxPoolSize: 10,
+      minPoolSize: 1,
     };
-
     await mongoose.connect(process.env.MONGO_URI, connectionOptions);
     console.log('✅ MongoDB Atlas connected');
     console.log('📊 Database:', mongoose.connection.db?.databaseName || 'Unknown');
-    console.log('📊 Connection State:', mongoose.connection.readyState);
   } catch (err) {
     console.error('❌ MongoDB connection failed:', err.message);
-    console.error('❌ Connection error details:', err);
-    // Don't throw - let the app continue, connections will retry
+    // Don't throw – app still responds, routes will retry or return errors
   }
 };
 
-// Connect to MongoDB
+// Connect only when MONGO_URI is set (so / and /api/test always respond)
 connectDB();
 
 // Handle MongoDB connection events

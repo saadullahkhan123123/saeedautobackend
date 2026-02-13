@@ -1,7 +1,15 @@
-const express = require('express');
-const mongoose = require('mongoose');
-const cors = require('cors');
-require('dotenv').config();
+import express from "express";
+import mongoose from "mongoose";
+import cors from "cors";
+import dotenv from "dotenv";
+import itemsRoutes from "./routes/items.js";
+import incomeRoutes from "./routes/income.js";
+import slipsRoutes from "./routes/slips.js";
+import analyticsRoutes from "./routes/analytics.js";
+import historyRoutes from "./routes/history.js";
+import customerHistoryRoutes from "./routes/customerHistory.js";
+import resetRoutes from "./routes/reset.js";
+dotenv.config();
 
 const app = express();
 
@@ -160,13 +168,13 @@ app.get('/api/test', (req, res) => {
 /* -----------------------------------------
    ✅ Import routes
 ------------------------------------------- */
-app.use('/api/items', require('./routes/items'));
-app.use('/api/income', require('./routes/income'));
-app.use('/api/slips', require('./routes/slips'));
-app.use('/api/analytics', require('./routes/analytics'));
-app.use('/api/history', require('./routes/history'));
-app.use('/api/customer-history', require('./routes/customerHistory'));
-app.use('/api/reset', require('./routes/reset'));
+app.use('/api/items', itemsRoutes);
+app.use('/api/income', incomeRoutes);
+app.use('/api/slips', slipsRoutes);
+app.use('/api/analytics', analyticsRoutes);
+app.use('/api/history', historyRoutes);
+app.use('/api/customer-history', customerHistoryRoutes);
+app.use('/api/reset', resetRoutes);
 
 /* -----------------------------------------
    ✅ 404 Handler (MUST BE LAST)
@@ -181,7 +189,4 @@ app.use((req, res) => {
 /* -----------------------------------------
    ✅ Start Server
 ------------------------------------------- */
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-});
+export default app;
