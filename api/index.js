@@ -12,31 +12,34 @@ const allowedOrigins = [
   'http://127.0.0.1:5173',
 ];
 
-// CORS: allow Content-Type so browser preflight succeeds (fixes "Request header field content-type is not allowed")
-const corsOptions = {
-  origin: function (origin, callback) {
-    if (!origin) return callback(null, true);
-    if (allowedOrigins.indexOf(origin) !== -1) return callback(null, true);
-    if (origin && (origin.includes('localhost') || origin.includes('127.0.0.1'))) return callback(null, true);
-    callback(null, true);
-  },
+function getCorsOrigin(req) {
+  const origin = req.headers.origin;
+  if (origin && (allowedOrigins.indexOf(origin) !== -1 || origin.includes('localhost') || origin.includes('127.0.0.1')))
+    return origin;
+  return allowedOrigins[0];
+}
+
+// Set CORS on every response first (so even errors have the header – fixes "No Access-Control-Allow-Origin")
+app.use((req, res, next) => {
+  const origin = getCorsOrigin(req);
+  res.setHeader('Access-Control-Allow-Origin', origin);
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept, X-Requested-With, Origin');
+  if (req.method === 'OPTIONS') {
+    res.setHeader('Access-Control-Max-Age', '86400');
+    return res.sendStatus(204);
+  }
+  next();
+});
+
+app.use(cors({
+  origin: function (o, cb) { cb(null, true); },
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   credentials: true,
   allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With', 'Origin'],
   optionsSuccessStatus: 204,
-};
-app.use(cors(corsOptions));
-
-// Explicit OPTIONS (preflight) – must include Content-Type in Allow-Headers
-app.options('*', (req, res) => {
-  const origin = req.headers.origin;
-  res.setHeader('Access-Control-Allow-Origin', origin && allowedOrigins.indexOf(origin) !== -1 ? origin : allowedOrigins[0]);
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Accept, X-Requested-With, Origin');
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
-  res.setHeader('Access-Control-Max-Age', '86400');
-  res.sendStatus(204);
-});
+}));
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
