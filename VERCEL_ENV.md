@@ -45,3 +45,22 @@ If you use a different backend URL, add in the **frontend** project:
 | `VITE_API_URL`  | `https://saeedautobackend.vercel.app` |
 
 Then redeploy the frontend.
+
+---
+
+## If you still see "This Serverless Function has crashed" (500 / FUNCTION_INVOCATION_FAILED)
+
+1. **Root Directory is required**  
+   In the **backend** project: **Settings → General → Root Directory** → set to the folder that **contains** the `api` folder (e.g. **`express js`**).  
+   Do **not** leave it empty if your backend code lives in a subfolder. Then **Redeploy**.
+
+2. **Deploy from the backend folder (alternative)**  
+   From your machine: `cd "express js"` then run `vercel` (or `npx vercel`) and deploy from there. That way the project root is the backend folder.
+
+3. **Check the deployment**  
+   The repo layout should look like: `api/index.js`, `routes/`, `models/`, `package.json` all in the same root. If you open the deployment in Vercel, the root should show these.
+
+4. **Current `api/index.js`**  
+   It is a minimal handler (no Express) so it can run even if `node_modules` or paths are wrong. After you redeploy, open `https://saeedautobackend.vercel.app/`.  
+   - If you get JSON with `"status":"OK"`, the deployment and root are fine; we can switch back to the full Express app.  
+   - If it still crashes, the problem is Root Directory or the project not deploying from the backend folder (see steps 1–2).

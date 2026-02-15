@@ -1,15 +1,15 @@
-import express from "express";
-import mongoose from "mongoose";
-import cors from "cors";
-import dotenv from "dotenv";
-import itemsRoutes from "./routes/items.js";
-import incomeRoutes from "./routes/income.js";
-import slipsRoutes from "./routes/slips.js";
-import analyticsRoutes from "./routes/analytics.js";
-import historyRoutes from "./routes/history.js";
-import customerHistoryRoutes from "./routes/customerHistory.js";
-import resetRoutes from "./routes/reset.js";
-dotenv.config();
+const express = require('express');
+const mongoose = require('mongoose');
+const cors = require('cors');
+require('dotenv').config();
+
+const itemsRoutes = require('./routes/items');
+const incomeRoutes = require('./routes/income');
+const slipsRoutes = require('./routes/slips');
+const analyticsRoutes = require('./routes/analytics');
+const historyRoutes = require('./routes/history');
+const customerHistoryRoutes = require('./routes/customerHistory');
+const resetRoutes = require('./routes/reset');
 
 const app = express();
 
@@ -189,4 +189,7 @@ app.use((req, res) => {
 /* -----------------------------------------
    ✅ Start Server
 ------------------------------------------- */
-export default app;
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
+});

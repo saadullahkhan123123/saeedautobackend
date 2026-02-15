@@ -5,8 +5,8 @@ const SoldProductSchema = new mongoose.Schema({
     type: String, 
     required: false,
     trim: true,
-    default: '',
-    index: true
+    default: ''
+    // index removed: duplicate of IncomeSchema.index({ 'productsSold.productName': 1 })
   },
   sku: { 
     type: String,
