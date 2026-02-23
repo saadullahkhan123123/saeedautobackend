@@ -59,7 +59,7 @@ const ensureConnection = async () => {
     } catch (err) {
       // Connection attempt failed, return false
       console.error('⚠️ Reconnection attempt failed:', err.message);
-      return false;
+    return false;
     }
   }
   
@@ -307,7 +307,7 @@ router.post('/', async (req, res) => {
     const generatedName = isSimpleProduct
       ? name.trim()
       : ((name && name.trim()) 
-          ? name.trim() 
+      ? name.trim() 
           : `${productType || 'Cover'}${coverType ? ` - ${coverType}` : ''}${plateType ? ` - ${plateType}` : ''}${formVariant ? ` - ${formVariant}` : ''}`.trim());
     
     const productTypeForSku = productType || 'Cover';
@@ -377,33 +377,33 @@ router.post('/', async (req, res) => {
 
     // Validation: productType-specific only when NOT a simple/custom product (no custom name)
     if (!isSimpleProduct) {
-      if (productType === 'Cover' && !coverType) {
-        return res.status(400).json({ error: 'Cover Type is required when Product Type is Cover' });
-      }
-      if (productType === 'Plate') {
-        if (bikeName === 'Plastic Plate') {
+    if (productType === 'Cover' && !coverType) {
+      return res.status(400).json({ error: 'Cover Type is required when Product Type is Cover' });
+    }
+    if (productType === 'Plate') {
+      if (bikeName === 'Plastic Plate') {
           // Plastic Plate is standalone
-        } else {
-          if (!bikeName) {
-            return res.status(400).json({ error: 'Bike Name is required for Plate products (except Plastic Plate)' });
-          }
-          if (!plateType) {
-            return res.status(400).json({ error: 'Plate Type is required for Plate products (except Plastic Plate)' });
-          }
-          if (bikeName === '70' && !plateCompany) {
-            return res.status(400).json({ error: 'Company is required for Bike 70' });
-          }
+      } else {
+        if (!bikeName) {
+          return res.status(400).json({ error: 'Bike Name is required for Plate products (except Plastic Plate)' });
+        }
+        if (!plateType) {
+          return res.status(400).json({ error: 'Plate Type is required for Plate products (except Plastic Plate)' });
+        }
+        if (bikeName === '70' && !plateCompany) {
+          return res.status(400).json({ error: 'Company is required for Bike 70' });
         }
       }
-      if (productType === 'Form') {
-        if (!formCompany) {
-          return res.status(400).json({ error: 'Company is required for Form products' });
-        }
-        if (!formType) {
-          return res.status(400).json({ error: 'Form Type is required for Form products' });
-        }
-        if (!formVariant) {
-          return res.status(400).json({ error: 'Form Variant is required for Form products' });
+    }
+    if (productType === 'Form') {
+      if (!formCompany) {
+        return res.status(400).json({ error: 'Company is required for Form products' });
+      }
+      if (!formType) {
+        return res.status(400).json({ error: 'Form Type is required for Form products' });
+      }
+      if (!formVariant) {
+        return res.status(400).json({ error: 'Form Variant is required for Form products' });
         }
       }
     }
@@ -433,17 +433,17 @@ router.post('/', async (req, res) => {
       itemData.bikeName = (bikeName && typeof bikeName === 'string') ? bikeName.trim() : '';
     }
     if (!isSimpleProduct) {
-      if (productType === 'Cover') {
-        itemData.coverType = coverType || '';
-      } else if (productType === 'Plate') {
-        itemData.plateCompany = plateCompany || '';
-        itemData.bikeName = bikeName || '';
-        itemData.plateType = plateType || '';
-      } else if (productType === 'Form') {
-        itemData.formCompany = formCompany || '';
-        itemData.formType = formType || '';
-        itemData.formVariant = formVariant || '';
-        itemData.bikeName = formBikeName || '';
+    if (productType === 'Cover') {
+      itemData.coverType = coverType || '';
+    } else if (productType === 'Plate') {
+      itemData.plateCompany = plateCompany || '';
+      itemData.bikeName = bikeName || '';
+      itemData.plateType = plateType || '';
+    } else if (productType === 'Form') {
+      itemData.formCompany = formCompany || '';
+      itemData.formType = formType || '';
+      itemData.formVariant = formVariant || '';
+      itemData.bikeName = formBikeName || '';
       }
     }
 

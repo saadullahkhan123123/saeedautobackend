@@ -61,7 +61,7 @@ const ensureConnection = async () => {
     } catch (err) {
       // Connection attempt failed, return false
       console.error('⚠️ Reconnection attempt failed:', err.message);
-      return false;
+    return false;
     }
   }
   
