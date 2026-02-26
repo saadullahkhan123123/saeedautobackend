@@ -554,40 +554,10 @@ router.put('/:id', async (req, res) => {
     const finalFormType = formType !== undefined ? formType : existingItem.formType;
     const finalFormVariant = formVariant !== undefined ? formVariant : existingItem.formVariant;
 
-    // Validation: If productType is Cover, coverType is required (only validate if productType is being changed)
-    if (finalProductType === 'Cover' && !finalCoverType && productType !== undefined) {
-      return res.status(400).json({ error: 'Cover Type is required when Product Type is Cover' });
-    }
-
-    // Validation: If productType is Plate, validate required fields (only if productType is being changed)
-    if (finalProductType === 'Plate' && productType !== undefined) {
-      if (finalBikeName === 'Plastic Plate') {
-        // Plastic Plate is standalone
-      } else {
-        if (!finalBikeName) {
-          return res.status(400).json({ error: 'Bike Name is required for Plate products (except Plastic Plate)' });
-        }
-        if (!finalPlateType) {
-          return res.status(400).json({ error: 'Plate Type is required for Plate products (except Plastic Plate)' });
-        }
-        if (finalBikeName === '70' && !finalPlateCompany) {
-          return res.status(400).json({ error: 'Company is required for Bike 70' });
-        }
-      }
-    }
-
-    // Validation: If productType is Form, validate required fields (only if productType is being changed)
-    if (finalProductType === 'Form' && productType !== undefined) {
-      if (!finalFormCompany) {
-        return res.status(400).json({ error: 'Company is required for Form products' });
-      }
-      if (!finalFormType) {
-        return res.status(400).json({ error: 'Form Type is required for Form products' });
-      }
-      if (!finalFormVariant) {
-        return res.status(400).json({ error: 'Form Variant is required for Form products' });
-      }
-    }
+    // NOTE: For updates, we intentionally do NOT enforce product-type specific
+    // required fields (coverType, plate fields, form fields). This allows the
+    // admin to update only quantity/price from the inventory page without
+    // being blocked by extra validations.
 
     // Build update object - only update fields that are provided
     const updateData = {};
