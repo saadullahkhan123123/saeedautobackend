@@ -47,9 +47,18 @@ app.use(
   })
 );
 
-// Parse JSON
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// Parse JSON - with proper configuration
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+// Debug middleware to check if body is being parsed (remove in production if needed)
+app.use((req, res, next) => {
+  if (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH') {
+    console.log('📦 Request Body:', req.body);
+    console.log('📋 Content-Type:', req.get('Content-Type'));
+  }
+  next();
+});
 
 /* -----------------------------------------
    ✅ Connect MongoDB Atlas (Local Development)

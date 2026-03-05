@@ -329,6 +329,15 @@ router.post('/', async (req, res) => {
       });
     }
 
+    // Check if req.body exists
+    if (!req.body || Object.keys(req.body).length === 0) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({ 
+        error: 'Request body is empty or not parsed. Make sure Content-Type is application/json' 
+      });
+    }
+
     const { customerName, customerPhone, paymentMethod, subtotal, totalAmount, discount = 0, partialPayment = 0, products } = req.body;
 
     if (!products || products.length === 0) {
@@ -366,37 +375,21 @@ router.post('/', async (req, res) => {
       const quantity = p.quantity;
       const unitPrice = p.unitPrice ?? p.price;
 
-      // Build query to find product by attributes (like addItems)
-      const query = {
-        productType: p.productType || 'Cover',
-        $or: [{ isActive: true }, { isActive: { $exists: false } }]
-      };
-
-      // Add productType-specific fields
-      if (p.productType === 'Cover' && p.coverType) {
-        query.coverType = p.coverType;
-      } else if (p.productType === 'Plate') {
-        if (p.bikeName) query.bikeName = p.bikeName;
-        if (p.plateCompany) query.plateCompany = p.plateCompany;
-        if (p.plateType) query.plateType = p.plateType;
-      } else if (p.productType === 'Form') {
-        if (p.formCompany) query.formCompany = p.formCompany;
-        if (p.formType) query.formType = p.formType;
-        if (p.formVariant) query.formVariant = p.formVariant;
-        if (p.bikeName) query.bikeName = p.bikeName; // Form uses bikeName field
+      if (!productName || !quantity || quantity <= 0) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(400).json({ error: 'Invalid product data: productName and quantity are required' });
       }
 
-      // Try to find by attributes first
-      let inventoryItem = await Item.findOne(query).session(session);
-      
-      // If not found by attributes, try by name/SKU as fallback
-      if (!inventoryItem && productName) {
+      // PRIORITY 1: Try to find by exact name/SKU match first (most reliable)
+      let inventoryItem = null;
+      if (productName) {
         inventoryItem = await Item.findOne({
           $and: [
             {
               $or: [
-                { name: { $regex: new RegExp(`^${productName}$`, 'i') } },
-                { sku: { $regex: new RegExp(`^${productName}$`, 'i') } }
+                { name: { $regex: new RegExp(`^${productName.trim()}$`, 'i') } },
+                { sku: { $regex: new RegExp(`^${productName.trim()}$`, 'i') } }
               ]
             },
             {
@@ -406,25 +399,58 @@ router.post('/', async (req, res) => {
         }).session(session);
       }
 
+      // PRIORITY 2: If not found by name/SKU, try by attributes (fallback)
+      if (!inventoryItem) {
+        const query = {
+          productType: p.productType || 'Cover',
+          $or: [{ isActive: true }, { isActive: { $exists: false } }]
+        };
+
+        // Add productType-specific fields
+        if (p.productType === 'Cover' && p.coverType) {
+          query.coverType = p.coverType;
+        } else if (p.productType === 'Plate') {
+          if (p.bikeName) query.bikeName = p.bikeName;
+          if (p.plateCompany) query.plateCompany = p.plateCompany;
+          if (p.plateType) query.plateType = p.plateType;
+        } else if (p.productType === 'Form') {
+          if (p.formCompany) query.formCompany = p.formCompany;
+          if (p.formType) query.formType = p.formType;
+          if (p.formVariant) query.formVariant = p.formVariant;
+          if (p.bikeName) query.bikeName = p.bikeName;
+        }
+
+        inventoryItem = await Item.findOne(query).session(session);
+      }
+
       if (!inventoryItem) {
         await session.abortTransaction();
         session.endSession();
         return res.status(400).json({ 
           error: `Product not found in inventory`,
-          details: `No matching product found for: ${productName || JSON.stringify(query)}`
+          details: `No matching product found for: ${productName}`
         });
       }
 
-      if (inventoryItem.quantity < quantity) {
+      // Refresh the item from database to get latest quantity (avoid stale data)
+      const freshItem = await Item.findById(inventoryItem._id).session(session);
+      if (!freshItem) {
+        await session.abortTransaction();
+        session.endSession();
+        return res.status(400).json({ error: `Product '${productName}' was found but could not be retrieved` });
+      }
+
+      // Check stock with fresh data
+      if (freshItem.quantity < quantity) {
         await session.abortTransaction();
         session.endSession();
         return res.status(400).json({
-          error: `Insufficient stock for '${productName}'. Available: ${inventoryItem.quantity}`
+          error: `Insufficient stock for '${productName}'. Available: ${freshItem.quantity}, Requested: ${quantity}`
         });
       }
 
       productUpdates.push({
-        itemId: inventoryItem._id,
+        itemId: freshItem._id,
         quantity
       });
     }
@@ -709,6 +735,15 @@ router.put('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Slip not found' });
     }
 
+    // Check if req.body exists
+    if (!req.body || Object.keys(req.body).length === 0) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(400).json({ 
+        error: 'Request body is empty or not parsed. Make sure Content-Type is application/json' 
+      });
+    }
+
     const { 
       customerName, 
       customerPhone,
@@ -761,11 +796,17 @@ router.put('/:id', async (req, res) => {
         }
 
         const inventoryItem = await Item.findOne({
-          $or: [
-            { name: { $regex: new RegExp(productName, 'i') } },
-            { sku: { $regex: new RegExp(productName, 'i') } }
-          ],
-          isActive: true
+          $and: [
+            {
+              $or: [
+                { name: { $regex: new RegExp(`^${productName.trim()}$`, 'i') } },
+                { sku: { $regex: new RegExp(`^${productName.trim()}$`, 'i') } }
+              ]
+            },
+            {
+              $or: [{ isActive: true }, { isActive: { $exists: false } }]
+            }
+          ]
         }).session(session);
 
         if (!inventoryItem) {
@@ -774,13 +815,21 @@ router.put('/:id', async (req, res) => {
           return res.status(400).json({ error: `Product '${productName}' not found in inventory` });
         }
 
+        // Refresh the item from database to get latest quantity (after restoring old stock)
+        const freshItem = await Item.findById(inventoryItem._id).session(session);
+        if (!freshItem) {
+          await session.abortTransaction();
+          session.endSession();
+          return res.status(400).json({ error: `Product '${productName}' was found but could not be retrieved` });
+        }
+
         // Check if we have enough stock (considering we already restored old quantity)
-        const currentStock = inventoryItem.quantity;
+        const currentStock = freshItem.quantity;
         if (currentStock < quantity) {
           await session.abortTransaction();
           session.endSession();
           return res.status(400).json({
-            error: `Insufficient stock for '${productName}'. Available: ${currentStock}`
+            error: `Insufficient stock for '${productName}'. Available: ${currentStock}, Requested: ${quantity}`
           });
         }
 

@@ -5,6 +5,13 @@ const Income = require('../models/income');
 // POST /api/income - Create income record
 router.post('/', async (req, res) => {
   try {
+    // Check if req.body exists
+    if (!req.body || Object.keys(req.body).length === 0) {
+      return res.status(400).json({ 
+        error: 'Request body is empty or not parsed. Make sure Content-Type is application/json' 
+      });
+    }
+
     const { totalIncome, productsSold, date, notes, customerName, paymentMethod, slipNumber } = req.body;
 
     if (!totalIncome || !productsSold || !Array.isArray(productsSold)) {
@@ -394,6 +401,13 @@ router.get('/:id', async (req, res) => {
 // PUT /api/income/:id - Update income record
 router.put('/:id', async (req, res) => {
   try {
+    // Check if req.body exists
+    if (!req.body || Object.keys(req.body).length === 0) {
+      return res.status(400).json({ 
+        error: 'Request body is empty or not parsed. Make sure Content-Type is application/json' 
+      });
+    }
+
     const { totalIncome, productsSold, date, notes, customerName, paymentMethod } = req.body;
 
     const updatedRecord = await Income.findByIdAndUpdate(
