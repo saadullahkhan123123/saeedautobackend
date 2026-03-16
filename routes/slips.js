@@ -346,28 +346,6 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ error: 'Products cannot be empty' });
     }
 
-    if (subtotal == null || totalAmount == null) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({ error: 'Subtotal and totalAmount required' });
-    }
-
-    // Validate subtotal and totalAmount are numbers
-    const validSubtotal = parseFloat(subtotal);
-    const validTotalAmount = parseFloat(totalAmount);
-    
-    if (isNaN(validSubtotal) || isNaN(validTotalAmount)) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({ error: 'Subtotal and totalAmount must be valid numbers' });
-    }
-    
-    if (validSubtotal < 0 || validTotalAmount < 0) {
-      await session.abortTransaction();
-      session.endSession();
-      return res.status(400).json({ error: 'Subtotal and totalAmount cannot be negative' });
-    }
-
     const productUpdates = [];
 
     for (const p of products) {
@@ -552,6 +530,15 @@ router.post('/', async (req, res) => {
       }
     });
 
+    // Recalculate subtotal and totalAmount from processed products to avoid frontend calculation bugs
+    const computedSubtotal = processedProducts.reduce(
+      (sum, product) => sum + (parseFloat(product.totalPrice) || 0),
+      0
+    );
+
+    const validDiscount = Math.max(0, parseFloat(discount) || 0);
+    const computedTotalAmount = Math.max(0, computedSubtotal - validDiscount);
+
     // Calculate customer balance for Udhar payments
     let previousBalance = 0;
     let currentBalance = 0;
@@ -567,14 +554,14 @@ router.post('/', async (req, res) => {
       }).session(session);
       
       previousBalance = previousSlips.reduce((sum, slip) => {
-        const slipTotal = (slip.totalAmount || 0) - (slip.discount || 0);
+        // Calculate remaining balance from each previous slip
+        const slipTotal = (slip.totalAmount || 0); // totalAmount is already after discount
         const partialPaid = slip.partialPayment || 0;
-        return sum + (slipTotal - partialPaid);
+        return sum + Math.max(0, slipTotal - partialPaid);
       }, 0);
       
-      // Current bill amount (after discount)
-      const discountAmount = parseFloat(discount) || 0;
-      const currentBillAmount = validTotalAmount - discountAmount;
+      // Current bill amount (computedTotalAmount is already after discount)
+      const currentBillAmount = computedTotalAmount;
       
       // Remaining balance for this bill (after partial payment)
       const currentRemaining = Math.max(0, currentBillAmount - partialPaymentAmount);
@@ -590,9 +577,9 @@ router.post('/', async (req, res) => {
       customerPhone: customerPhone || '',
       paymentMethod: paymentMethod || 'Cash',
       products: processedProducts,
-      subtotal: validSubtotal,
-      discount: parseFloat(discount) || 0,
-      totalAmount: validTotalAmount,
+      subtotal: computedSubtotal,
+      discount: validDiscount,
+      totalAmount: computedTotalAmount,
       previousBalance: previousBalance,
       currentBalance: currentBalance,
       partialPayment: paymentMethod === 'Udhar' ? partialPaymentAmount : 0,
@@ -651,13 +638,13 @@ router.post('/', async (req, res) => {
     });
 
     // Validate total income
-    if (validTotalAmount < 0) {
+    if (computedTotalAmount < 0) {
       throw new Error('Total amount cannot be negative');
     }
 
     const incomeRecord = new Income({
       date: new Date(),
-      totalIncome: validTotalAmount,
+      totalIncome: computedTotalAmount,
       productsSold: incomeProducts,
       customerName: (newSlip.customerName || 'Walk Customer').trim(),
       customerPhone: (newSlip.customerPhone || '').trim(),
@@ -744,7 +731,7 @@ router.put('/:id', async (req, res) => {
       });
     }
 
-    const { 
+    const {
       customerName, 
       customerPhone,
       paymentMethod,
@@ -753,6 +740,7 @@ router.put('/:id', async (req, res) => {
       subtotal, 
       totalAmount, 
       discount,
+      partialPayment,
       status 
     } = req.body;
 
@@ -849,9 +837,13 @@ router.put('/:id', async (req, res) => {
       }
     }
 
+    // Update slip with all fields
+    const updateData = {};
+    
     // Calculate customer balance for Udhar payments if payment method or customer changed
     let previousBalance = existingSlip.previousBalance || 0;
     let currentBalance = existingSlip.currentBalance || 0;
+    let remainingBalance = existingSlip.remainingBalance || 0;
     
     if ((paymentMethod === 'Udhar' || existingSlip.paymentMethod === 'Udhar') && customerName && customerName.trim() !== 'Walk Customer') {
       const customerNameToUse = customerName || existingSlip.customerName;
@@ -864,27 +856,40 @@ router.put('/:id', async (req, res) => {
       }).session(session);
       
       previousBalance = previousSlips.reduce((sum, slip) => {
-        return sum + (slip.totalAmount || 0) - (slip.discount || 0);
+        // Calculate remaining balance from each previous slip
+        const slipTotal = (slip.totalAmount || 0); // totalAmount is already after discount
+        const partialPaid = slip.partialPayment || 0;
+        return sum + Math.max(0, slipTotal - partialPaid);
       }, 0);
       
       // Current balance = previous balance + current slip amount (after discount)
-      const discountAmount = parseFloat(discount) !== undefined ? parseFloat(discount) : (existingSlip.discount || 0);
-      const finalTotal = totalAmount !== undefined ? parseFloat(totalAmount) : existingSlip.totalAmount;
-      currentBalance = previousBalance + (finalTotal - discountAmount);
+      const finalTotal =
+        updateData.totalAmount !== undefined
+          ? updateData.totalAmount
+          : (totalAmount !== undefined ? parseFloat(totalAmount) : existingSlip.totalAmount);
+      const partialPaymentAmount = parseFloat(partialPayment) !== undefined ? parseFloat(partialPayment) : (existingSlip.partialPayment || 0);
+      currentBalance = previousBalance + finalTotal;
+      
+      // Calculate remaining balance
+      const currentRemaining = Math.max(0, finalTotal - partialPaymentAmount);
+      remainingBalance = previousBalance + currentRemaining;
+      
+      updateData.partialPayment = paymentMethod === 'Udhar' ? partialPaymentAmount : 0;
+      updateData.remainingBalance = paymentMethod === 'Udhar' ? remainingBalance : 0;
+    } else {
+      // If not Udhar, reset these fields
+      updateData.partialPayment = 0;
+      updateData.remainingBalance = 0;
     }
-
-    // Update slip with all fields
-    const updateData = {};
     if (customerName !== undefined) updateData.customerName = customerName;
     if (customerPhone !== undefined) updateData.customerPhone = customerPhone;
     if (paymentMethod !== undefined) updateData.paymentMethod = paymentMethod;
     if (notes !== undefined) updateData.notes = notes;
-    if (subtotal !== undefined) updateData.subtotal = subtotal;
-    if (totalAmount !== undefined) updateData.totalAmount = totalAmount;
-    if (discount !== undefined) updateData.discount = parseFloat(discount) || 0;
+    // subtotal/totalAmount/discount will be recalculated below when products or discount change
     if (status !== undefined) updateData.status = status;
     updateData.previousBalance = previousBalance;
     updateData.currentBalance = currentBalance;
+    // remainingBalance and partialPayment already set above
     // Helper function for bulk discount (same as in POST)
     const calculateBulkDiscount = (coverType, quantity, basePrice) => {
       const bulkDiscountTypes = [
@@ -959,6 +964,20 @@ router.put('/:id', async (req, res) => {
           company: p.company || ''
         };
       });
+
+      // Recalculate subtotal and totalAmount based on updated products and discount
+      const recalculatedSubtotal = updateData.products.reduce(
+        (sum, product) => sum + (parseFloat(product.totalPrice) || 0),
+        0
+      );
+
+      const effectiveDiscount =
+        discount !== undefined ? Math.max(0, parseFloat(discount) || 0) : (existingSlip.discount || 0);
+      const recalculatedTotalAmount = Math.max(0, recalculatedSubtotal - effectiveDiscount);
+
+      updateData.subtotal = recalculatedSubtotal;
+      updateData.discount = effectiveDiscount;
+      updateData.totalAmount = recalculatedTotalAmount;
     }
     // Handle cancellation with full synchronization
     if (status === 'Cancelled') {
