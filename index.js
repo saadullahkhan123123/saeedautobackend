@@ -51,14 +51,16 @@ app.use(
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
-// Debug middleware to check if body is being parsed (remove in production if needed)
-app.use((req, res, next) => {
-  if (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH') {
-    console.log('📦 Request Body:', req.body);
-    console.log('📋 Content-Type:', req.get('Content-Type'));
-  }
-  next();
-});
+// Optional debug middleware (enabled only in development to avoid slowing requests)
+if (process.env.NODE_ENV === 'development') {
+  app.use((req, res, next) => {
+    if (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH') {
+      console.log('📦 Request Body:', req.body);
+      console.log('📋 Content-Type:', req.get('Content-Type'));
+    }
+    next();
+  });
+}
 
 /* -----------------------------------------
    ✅ Connect MongoDB Atlas (Local Development)
